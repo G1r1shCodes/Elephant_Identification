@@ -22,6 +22,15 @@
 
 ## 1. System Overview
 
+### Project Structure
+The repository is heavily optimized around a **primary triad** of Python files that execute the production logic:
+- `app.py` — The PyQt6 desktop GUI interface for the Human-in-the-Loop workflow.
+- `pipeline.py` — The deep learning stack (YOLO detection, geometrical cropping, and 128-D generic ConvNeXt inference).
+- `core_engine.py` — The statistical matrix engine that performs clustering and match assignments.
+
+All auxiliary evaluations and data-scrubbing tools live safely within the `tools/` directory.
+
+### Flow Architecture
 The system performs **open-set biometric re-identification** of wild Asian elephants. Given a batch of field photographs, it:
 
 1. **Detects** the elephant's head (YOLOv8n head detector)

@@ -1,135 +1,55 @@
-# Unique Elephant Identification System
+# 🐘 Elephant Re-Identification System
 
-Open-set biometric elephant re-identification for Wildlife Institute of India.  
-**259 identities · 384-D embeddings · ConvNeXt-Tiny + Part-Based Pooling**
+Open-set biometric elephant re-identification engine built for the **Wildlife Institute of India (WII)**.
 
----
-
-## Quick Start
-
-### Training on Kaggle (GPU) ⚡
-```bash
-# 1. Upload kaggle/elephant-reid-training-v4.4.ipynb to Kaggle
-# 2. Enable GPU (P100 or T4) + Internet
-# 3. Add the `restructured-elephant-dataset` dataset
-# 4. Run all cells  (~40 epochs, ~30-50 min on P100)
-```
-
-### Running the App 🐘
-```bash
-streamlit run app.py
-```
-Requires `best_model v4.6.pth` and `gallery_embeddings.pt` in the project root.
-
-### Local Setup
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
+This system guarantees human-validated tracking of wild elephants across disparate camera trap locations. It utilizes a conservative deep learning pipeline driven by a **YOLOv8** head detector, a **ConvNeXt-Tiny (V8.2)** embedding extractor, and aggressive, non-drifting graph-connected clustering logic.
 
 ---
 
-## Project Structure
+## 🚀 Core Components
 
-```
-├── app.py                        # Streamlit application (v4.6 inference)
-├── best_model v4.6.pth           # Trained model weights
-├── gallery_embeddings.pt         # Per-image embeddings + identity map
-├── embeddings.pt                 # Full dataset embeddings (all 259 IDs)
-├── kaggle/
-│   ├── elephant-reid-training-v4.4.ipynb  # Training notebook (v4.4/v4.6)
-│   └── dataset/                  # Kaggle dataset metadata
-├── src/
-│   └── models/
-│       ├── dual_branch_extractor.py  # DualBranchModel (v4.4/v4.6 canonical)
-│       └── __init__.py
-├── tests/
-│   └── eval_v46.py               # Evaluation script (leave-one-out on embeddings.pt)
-├── data/                         # Datasets (gitignored)
-├── docs/
-│   └── model_architecture.png    # Architecture diagram
-└── requirements.txt
-```
+The system has been heavily optimized and pruned. The runtime is driven entirely by three core files:
 
----
-
-## Model Architecture (v4.4 / v4.6)
-
-**Backbone**: ConvNeXt-Tiny, split into three stages for layer-wise LR.
-
-![Elephant Re-Identification Model Architecture](docs/model_architecture.png)
-
-| Property           | Value                                                                        |
-|--------------------|------------------------------------------------------------------------------|
-| Backbone           | ConvNeXt-Tiny (ImageNet pretrained)                                          |
-| Embedding dim      | 384-D                                                                        |
-| Part stripes       | 3 (head / torso / legs)                                                      |
-| Identities         | 259                                                                          |
-| Training epochs    | 40                                                                           |
-| Loss               | SemiHard Triplet + ArcFace (w=0.07) + Multi-crop Consistency + Part Dropout  |
-| Input size         | 256 × 128                                                                    |
-| Output             | L2-normalized 384-D embedding                                                |
-
-### Evaluation Results
-
-> ⚠️ **Note on metrics:** `embeddings.pt` is generated with `train_ratio=1.0` (all images used for training),
-> so the leave-one-out scores below are **optimistic** — the model has seen every image during training.
-> True held-out validation metrics (on the 20% val split) are lower and are printed during the Kaggle notebook run.
-
-| Metric               | Score *(training-set eval)* |
-|----------------------|-----------------------------|
-| Rank-1               | 87.92%                      |
-| Rank-5               | 91.42%                      |
-| Rank-10              | 92.91%                      |
-| mAP                  | 68.10%                      |
-| Centroid Rank-1      | 87.57%                      |
-| Centroid Rank-5      | 92.91%                      |
-| Centroid Rank-10     | 94.22%                      |
-
-*Eval: 1189 images, 259 identities, leave-one-out cosine similarity.*
-
----
-
-## Training Configuration (v4.4 notebook)
-
-| Parameter             | Value                        |
-|-----------------------|------------------------------|
-| `BATCH_SIZE`          | 32 (P=8 identities × M=4)   |
-| `EMBEDDING_DIM`       | 384                          |
-| `NUM_EPOCHS`          | 40                           |
-| `BASE_LR`             | 3e-4                         |
-| `MARGIN_PHASE1`       | 0.15 (epochs 1–15)           |
-| `MARGIN_PHASE2`       | 0.22 (epochs 16–40)          |
-| `ARCFACE_SCALE`       | 20.0                         |
-| `ARCFACE_MARGIN`      | 0.40                         |
-| `QUEUE_SIZE`          | 4096                         |
-| `CONSISTENCY_WEIGHT`  | 0.045                        |
-| `PART_DROPOUT_WEIGHT` | 0.10                         |
-
-> 📊 **Metrics**: Run the notebook on Kaggle to see per-epoch Rank-1, Rank-5, mAP,
-> centroid Rank-1, and TTA crop-robustness scores printed every 5 epochs.
-
----
-
-## Augmentation Strategy (v4.6)
-
-- **View 1** (train): Resize → 270×135 → RandomCrop(256×128) → HFlip → ColorJitter → GaussianBlur → RandomErasing(p=0.25)
-- **View 2** (consistency): Biased region crop — 40% top (head/ears), 40% centre (torso), 20% bottom (legs) — resize to 256×128
-- **Part Dropout** (p=0.70): zero one horizontal stripe per image to enforce partial-view invariance
-
----
-
-## Key Files
-
-| File | Purpose |
+| Core File | Purpose |
 |------|---------|
-| `app.py` | Streamlit app — batch upload, gallery matching, registration |
-| `src/models/dual_branch_extractor.py` | Canonical model class + inference helpers |
-| `kaggle/elephant-reid-training-v4.4.ipynb` | Full training pipeline |
-| `best_model v4.6.pth` | Best checkpoint by Rank-1 |
-| `gallery_embeddings.pt` | Keys: `embeddings`, `labels`, `idx_to_identity` |
+| **`app.py`** | The Desktop Application (PyQt6). Provides a 4-tab interface for Mass Processing, Gallery Browsing, Identity Registration, and Human-in-the-loop Merge Queues. |
+| **`pipeline.py`** | The Deep Learning Inference layer. Executes the multi-scale Head Detection cascade, applies heuristic crop-quality gating, and generates strict 128-D L2-normalized metric embeddings. |
+| **`core_engine.py`** | The Clustering Logic. Implements K-Reciprocal nearest neighbor re-ranking, cross-session Unknown Cluster Management, and dynamic graph-cluster merging governed by conservative thresholds. |
 
 ---
 
-**Wildlife Institute of India Research Project**
+## 🏗️ Architecture Stack
+
+- **Detection:** YOLOv8n (trained aggressively for diverse field scales and partial occlusions)
+- **Feature Extractor:** ConvNeXt-Tiny (trained using Hard-Positive Alignment and ArcFace loss)
+- **Dimensionality:** L2-normalized 128-D embeddings
+- **Clustering:** Transitive graph-based clustering with triple-condition merge guards (to heavily penalize and block False Positives).
+- **GUI Framework:** PyQt6
+
+---
+
+## 📂 Repository Structure
+
+```text
+├── app.py                      # Main PyQt6 App
+├── pipeline.py                 # Core AI evaluation engine
+├── core_engine.py              # Clustering and match logic
+├── ruff_cache/                 # Pre-commit configurations
+├── app_config.json             # State serialization
+├── PROJECT_GUIDE.md            # Highly detailed engineering manifesto!
+├── README.md                   # This file
+├── tools/                      # Diagnostic scripts, evaluating tools, & dataset pruning modules
+├── models/                     # Holds yolov8n.pt and elephant_head_reid checkpoints
+├── data/                       # Contains active runtime images and SQlite tracking DBs
+├── docs/                       # Historical design notes and WII documentation
+├── logs/                       # Application runtime and debug crash logs
+└── tests/                      # System integrity unit tests
+```
+
+---
+
+## 📘 Deep Dive Guide
+
+The application logic, exact hyper-parameter threshold charts, tuning methodologies, and complete design rationale are extremely well documented.
+
+**Please refer to the `PROJECT_GUIDE.md` contained at the root of the project for a complete 34 KB deep-dive into the backend systems.**
