@@ -17,6 +17,8 @@
 7. [End-to-End Data Flow](#7-end-to-end-data-flow)
 8. [Model Evolution History](#8-model-evolution)
 9. [Key Design Rationale](#9-design-rationale)
+10. [Project Phases & Current Status](#10-project-phases--current-status)
+11. [Key Challenges](#11-key-challenges)
 
 ---
 
@@ -796,3 +798,78 @@ Four safety checks:
   - Cross-elephant max similarity: up to **0.33**
 - This overlap zone means every threshold must be carefully calibrated
 - Better to send an image to human review than to auto-assign incorrectly
+
+---
+
+## 10. Project Phases & Current Status
+
+### ✅ Phase 1 — Feature Extraction (COMPLETE)
+- Elephant detection + head cropping via YOLOv8n
+- Embedding generation via ConvNeXt-Tiny
+- Shift from full-body → head-based features (major improvement in discriminative power)
+
+### ✅ Phase 2 — Clustering System (COMPLETE)
+- Initial centroid-based clustering → replaced with graph-based connected components
+- Union-Find anchoring with strong/weak edge expansion
+- Dramatically reduced identity fragmentation
+
+### ✅ Phase 3A — Review UI (COMPLETE)
+- Built the full Review & Merge PyQt6 interface (Tab 4)
+- Cluster visualization with image grids and outlier highlighting
+- Manual merge / split / promote actions with undo support
+
+### ✅ Phase 3B — Intelligent Suggestions (COMPLETE)
+- Ranking of candidate clusters using multi-signal scoring:
+  - Direct centroid similarity
+  - Max sample-to-sample similarity
+  - Bridge reasoning (indirect connections via shared neighbors)
+  - Relative similarity (rank within cluster context)
+- Confidence levels: HIGH / MEDIUM / LOW / WEAK
+
+### ⚠️ Phase 3C — Calibration & Reliability (ONGOING)
+
+**Goal:** Make the system trustworthy and data-driven.
+
+**What is implemented:**
+- Decision logging (`merge_decisions.csv`) — every accept/reject is recorded
+- Multi-dimensional scoring: direct similarity, bridge strength, cluster cohesion
+- Bounded scoring (prevents overconfidence from single lucky pairs)
+- Confidence hints (Safe / Review / Weak) displayed in the UI
+
+**What is in progress:**
+- Collecting real user decisions to build a statistical ground truth
+- Running analyzer on score distributions to derive data-driven thresholds
+- Deriving: safe-merge threshold, reject threshold
+- Validating precision (how reliable is a "safe merge" recommendation?)
+
+### 🔵 Phase 4 — Semi-Automation (NEXT)
+
+**Goal:** Reduce manual effort while maintaining correctness.
+
+- Auto-merge high-confidence clusters (above data-derived safe threshold)
+- Priority-based review queue (worst ambiguities first)
+- Confidence tiers (Safe / Review / Weak) to route human attention efficiently
+- Human focuses only on uncertain cases — everything else flows automatically
+
+### 🔵 Phase 5 — System Maturity (FUTURE)
+
+**Goal:** Make the system reliable, scalable, and deployable.
+
+- Better embeddings (handle extreme pose variation, seasonal appearance changes)
+- Adaptive thresholds (continuously calibrated from accumulated decisions)
+- Robust pipeline (graceful handling of noise, edge cases, corrupted inputs)
+- Formal evaluation metrics (precision, recall, F1 across identity classes)
+- Cross-dataset generalization (works beyond the WII Udalguri dataset)
+
+---
+
+## 11. Key Challenges
+
+| Challenge | Description |
+|-----------|-------------|
+| **Intra-class variation** | Same elephant looks very different across images (pose, lighting, occlusion) |
+| **Precision vs Recall trade-off** | Strict thresholds → identity fragmentation; Loose thresholds → wrong merges |
+| **Embedding limitations** | Some visually similar images still produce low cosine similarity scores |
+| **Decision-support design** | Showing useful merge suggestions without overwhelming or misleading the human reviewer |
+| **Compressed similarity distributions** | Within-elephant and cross-elephant similarity ranges overlap significantly |
+

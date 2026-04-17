@@ -2050,42 +2050,70 @@ class ElephantEngine:
                 assignment_meta = cluster_mgr.last_assignment or {}
 
                 if decision == "AMBIGUOUS" and cluster_name is None:
-                    cluster_folder = os.path.join(
-                        base_output_folder, "_ambiguous_matches"
-                    )
-                    os.makedirs(cluster_folder, exist_ok=True)
-
                     ranked = assignment_meta.get("candidates", [])
                     c1 = ranked[0] if len(ranked) > 0 else {}
                     c2 = ranked[1] if len(ranked) > 1 else {}
 
-                    for fpath, fname, crop_rgb in zip(
-                        member_paths, member_files, member_crops
+                    # Assign to the top candidate cluster so the image is visible
+                    # in the UI grid. The human review entry will still flag it.
+                    target_cluster_name = c1.get("name")
+                    if not target_cluster_name:
+                        # Fallback: create a new cluster if no candidate
+                        target_cluster_name = cluster_mgr._create_cluster(member_embs[0])
+
+                    cluster_folder = os.path.join(
+                        base_output_folder, target_cluster_name
+                    )
+                    os.makedirs(cluster_folder, exist_ok=True)
+
+                    for fpath, fname, crop_rgb, emb in zip(
+                        member_paths, member_files, member_crops, member_embs
                     ):
                         target_path = os.path.join(cluster_folder, fname)
                         if crop_rgb is not None:
                             try:
-                                crop_rgb.save(target_path)
+                                self._stamp_watermark_image(
+                                    crop_rgb, target_path,
+                                    target_cluster_name,
+                                    round((c1.get("score", 0.0) + 1) / 2 * 100, 1),
+                                )
                             except Exception:
-                                pass
+                                try:
+                                    crop_rgb.save(target_path)
+                                except Exception:
+                                    pass
                         else:
                             import shutil
-
                             try:
                                 shutil.copy(fpath, target_path)
                             except Exception:
                                 pass
 
-                        review_store.add_ambiguous_match(
-                            node_path=target_path,
-                            candidates=[
-                                {"cluster": c1.get("name"), "score": c1.get("score")},
-                                {"cluster": c2.get("name"), "score": c2.get("score")},
-                            ],
+                        # Add embedding to cluster so suggestions work
+                        cluster_mgr._add_to_cluster(target_cluster_name, emb)
+
+                    # Queue for human review with both candidates visible
+                    for emb, fname in zip(member_embs, member_files):
+                        review_store.add_ambiguity(
+                            {
+                                "source_type": "single",
+                                "review_reason": "AMBIGUOUS_TIE",
+                                "current_cluster": target_cluster_name,
+                                "file_paths": [os.path.join(cluster_folder, fname)],
+                                "source_filenames": [fname],
+                                "image_embedding": emb.tolist(),
+                                "candidate_a": {"name": c1.get("name"), "score": c1.get("score")},
+                                "candidate_b": {"name": c2.get("name"), "score": c2.get("score")},
+                                "top_candidates": ranked,
+                                "best_score": float(c1.get("score", 0.0)),
+                                "gap": float(c1.get("score", 0.0) - c2.get("score", 0.0)),
+                                "decision": "AMBIGUOUS",
+                            }
                         )
 
                     logger.info(
                         f"  [ambiguous] {member_files[0]} tied between {c1.get('name')} and {c2.get('name')}"
+                        f" → assigned to {target_cluster_name} for review"
                     )
                     continue
 

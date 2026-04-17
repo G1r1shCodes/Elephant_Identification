@@ -2070,8 +2070,8 @@ class ElephantApp(QMainWindow):
         self.suggestion_group = QGroupBox("🔗 Suggested Merges")
         self.suggestion_group.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.suggestion_group.setStyleSheet(f"""
-            QGroupBox {{ color: {NAVY_PRIMARY}; border: 1px solid {BORDER_SUBTLE}; border-radius: 4px; margin-top: 1ex; }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; }}
+            QGroupBox {{ color: {NAVY_PRIMARY}; border: 1px solid {BORDER_SUBTLE}; border-radius: 4px; margin-top: 14px; padding-top: 18px; }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 6px 0 6px; background: white; }}
         """)
 
         sugg_layout = QVBoxLayout(self.suggestion_group)
@@ -2450,7 +2450,6 @@ class ElephantApp(QMainWindow):
             btn_layout.setSpacing(10)
             btn_compare = QPushButton("🔍  Compare")
             btn_compare.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_compare.setMinimumWidth(140)
             btn_compare.setMinimumHeight(38)
             btn_compare.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
@@ -2460,8 +2459,8 @@ class ElephantApp(QMainWindow):
                 " font-weight: bold; border-radius: 4px; padding: 6px 14px; font-size: 12px;"
             )
             btn_compare.clicked.connect(
-                lambda checked, t=target, s=score, c=cand: (
-                    self._open_compare_dialog_for(t, score=s, cand=c)
+                lambda checked, t=target, s=score, c=cand, w=row_widget: (
+                    self._open_compare_dialog_for(t, score=s, cand=c, row_widget=w)
                 )
             )
 
@@ -2487,7 +2486,7 @@ class ElephantApp(QMainWindow):
 
             self.sugg_container_layout.addWidget(row_widget)
 
-    def _open_compare_dialog_for(self, target_cluster, score=None, cand=None):
+    def _open_compare_dialog_for(self, target_cluster, score=None, cand=None, row_widget=None):
         if not self.current_ambiguity_record:
             return
         cluster_name = self.current_ambiguity_record.get("current_cluster")
@@ -2535,7 +2534,7 @@ class ElephantApp(QMainWindow):
                 sims = []
                 for i, s_a in enumerate(ca["samples"]):
                     for j, s_b in enumerate(cb["samples"]):
-                        sim = float(torch.dot(torch.tensor(s_a), torch.tensor(s_b)))
+                        sim = float(torch.dot(s_a.clone().detach(), s_b.clone().detach()))
                         sims.append(sim)
                         if max_sim is None or sim > max_sim:
                             max_sim = sim
@@ -2552,8 +2551,8 @@ class ElephantApp(QMainWindow):
                         internal_b.append(
                             float(
                                 torch.dot(
-                                    torch.tensor(cb["samples"][i]),
-                                    torch.tensor(cb["samples"][j]),
+                                    cb["samples"][i].clone().detach(),
+                                    cb["samples"][j].clone().detach(),
                                 )
                             )
                         )
@@ -2596,6 +2595,9 @@ class ElephantApp(QMainWindow):
         def _on_reject():
             if cand is not None:
                 self._log_merge_decision(cluster_name, target_cluster, cand, "rejected")
+            if row_widget:
+                row_widget.setParent(None)
+                row_widget.deleteLater()
             original_reject()
 
         dialog.reject = _on_reject
@@ -2633,18 +2635,18 @@ class ElephantApp(QMainWindow):
             ]
             was_singleton = len(imgs) == 1
 
+        import time
         with open(log_file, "a", encoding="utf-8") as f:
             if write_header:
                 f.write(
                     "timestamp,source,target,effective_score,direct_score,bridge_score,cohesion,was_singleton,decision\n"
                 )
-            import time
 
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            eff = candidate_data.get("effective", 0.0)
-            score = candidate_data.get("score", 0.0)
-            bridge = candidate_data.get("bridge_score", 0.0)
-            coh = candidate_data.get("cohesion", 1.0)
+            eff = float(candidate_data.get("effective", 0.0))
+            score = float(candidate_data.get("max_member", candidate_data.get("score", 0.0)))
+            bridge = float(candidate_data.get("bridge_score", 0.0))
+            coh = float(candidate_data.get("cohesion", 1.0))
             f.write(
                 f"{ts},{source},{target},{eff:.4f},{score:.4f},{bridge:.4f},{coh:.4f},{was_singleton},{decision}\n"
             )
