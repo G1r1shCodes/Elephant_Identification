@@ -1,0 +1,35 @@
+# Core dependencies for Elephant Re-Identification System
+# Phase B: Detection-based preprocessing
+# Phase C: Feature extraction
+
+# Image processing
+opencv-python>=4.8.0
+numpy>=1.26.4
+Pillow>=9.5.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Detection model
+megadetector>=10.0.0
+
+# Data handling
+pandas>=2.0.0
+
+# Jupyter notebook support
+jupyter>=1.0.0
+ipykernel>=6.25.0
+ipywidgets>=8.1.0
+
+# Desktop application (PyQt6 GUI)
+PyQt6>=6.6.0
+
+# Web application (Streamlit backup — app_streamlit.py)
+streamlit>=1.28.0
+
+# Progress bars
+tqdm>=4.64.0
+
+# Deep learning (Phase C: Feature extraction)
+torch>=2.0.0
+torchvision>=0.15.0

@@ -1,0 +1,48 @@
+# Python Cache & Configs
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.ruff_cache/
+
+# Virtual Environments
+venv/
+env/
+.venv/
+env.bak/
+venv.bak/
+
+# Environment Variables & OS
+.env
+.DS_Store
+Thumbs.db
+
+# Machine Learning Checkpoints & Binaries
+*.pt
+*.pth
+*.h5
+*.onnx
+
+# Data, Logs & Artifact Archives
+*.zip
+*.tar
+*.gz
+*.db
+*.sqlite3
+*.log
+
+# Heavy Directories to Ignore
+data/
+models/
+outputs/
+logs/
+debug_outputs/
+debug_mini_herd/
+head_labeling/
+scratch/
+test_dir/
+build_artifacts/
+dist/
+build/
+*.egg-info/

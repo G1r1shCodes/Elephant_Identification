@@ -1,0 +1,26 @@
+{
+  "title": "Elephant Re-Identification Dataset (Processed)",
+  "id": "your-username/elephant-reid-processed",
+  "licenses": [
+    {
+      "name": "CC0-1.0"
+    }
+  ],
+  "keywords": [
+    "elephant",
+    "wildlife",
+    "re-identification",
+    "computer-vision"
+  ],
+  "description": "Processed elephant images for re-identification using MegaDetector v5a. Images are cropped and organized by individual elephant identity.",
+  "resources": [
+    {
+      "path": "Makhna",
+      "description": "Adult male elephants (Makhnas)"
+    },
+    {
+      "path": "Herd",
+      "description": "Herd elephants (various demographics)"
+    }
+  ]
+}
