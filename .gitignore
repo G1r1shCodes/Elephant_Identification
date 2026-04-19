@@ -46,6 +46,7 @@ build_artifacts/
 dist/
 build/
 *.egg-info/
+*.spec
 
 gallery_references/
 
