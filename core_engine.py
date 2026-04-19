@@ -506,7 +506,7 @@ class UnknownClusterManager:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def assign_group(self, group_embs):
+    def assign_group(self, group_embs, exclude_clusters=None):
         """Assign a multi-image group to the best existing cluster, or create new.
 
         Uses centroid similarity and flip TTA embeddings instead of pairwise
@@ -514,12 +514,15 @@ class UnknownClusterManager:
 
         Args:
             group_embs: list of 1-D float32 tensors (L2-normalised TTA embeddings)
+            exclude_clusters: optional set of cluster names to skip (e.g. split siblings)
 
         Returns:
             (cluster_name: str, score: float)
         """
         if not group_embs:
             raise ValueError("group_embs must be non-empty")
+        if exclude_clusters is None:
+            exclude_clusters = set()
 
         # 1. Compute group centroid
         group_centroid = F.normalize(torch.stack(group_embs).mean(0), p=2, dim=0)
@@ -539,6 +542,8 @@ class UnknownClusterManager:
         candidates = []
         for cname, cluster in self.clusters.items():
             if not cluster["samples"]:
+                continue
+            if cname in exclude_clusters:
                 continue
 
             centroid = F.normalize(cluster["centroid"], p=2, dim=0)
@@ -1827,20 +1832,23 @@ class ElephantEngine:
                     logger.info(f"  -> Match found: {label} ({score_pct}%)")
                     cat_folder = os.path.join(base_output_folder, label)
                     os.makedirs(cat_folder, exist_ok=True)
+                    # Always watermark the FULL original image
+                    self._stamp_watermark(
+                        filepath,
+                        os.path.join(cat_folder, filename),
+                        label,
+                        score_pct,
+                    )
+                    
+                    # Also save the extracted crop silently into a .crops folder
                     if crop_rgb is not None:
-                        self._stamp_watermark_image(
-                            crop_rgb,
-                            os.path.join(cat_folder, filename),
-                            label,
-                            score_pct,
-                        )
-                    else:
-                        self._stamp_watermark(
-                            filepath,
-                            os.path.join(cat_folder, filename),
-                            label,
-                            score_pct,
-                        )
+                        crop_dir = os.path.join(cat_folder, ".crops")
+                        os.makedirs(crop_dir, exist_ok=True)
+                        try:
+                            # Preserve EXIF or orientation if needed, but simple RGB save is fine
+                            crop_rgb.save(os.path.join(crop_dir, f"{filename}_crop.jpg"))
+                        except Exception:
+                            pass
                 else:
                     unknown_embs.append(query_emb.squeeze(0).cpu())
                     unknown_files.append(filename)
@@ -1945,8 +1953,75 @@ class ElephantEngine:
             # Now expand the strong anchors using the looser graph threshold
             final_groups = expand_clusters(valid_clusters, sim_matrix, expand_thr=0.47)
 
-            # Deduplicate and ensure all nodes are assigned
+            # Deduplicate intermediate expansion
             final_groups = deduplicate(final_groups)
+
+            # --- PHASE 3C: Bridge-Aware Purity Check & Surgical Split ---
+            pure_groups = []
+            split_sibling_registry = []  # list of lists-of-groups that must stay apart
+            for group in final_groups:
+                if len(group) <= 1:
+                    pure_groups.append(group)
+                    continue
+                
+                sub = sim_matrix[group][:, group]
+                mask = ~torch.eye(len(group), dtype=torch.bool, device=sub.device)
+                vals = sub[mask]
+                
+                min_sim = vals.min().item()
+                std_sim = vals.std().item()
+                
+                if min_sim < 0.72 or std_sim > 0.05:
+                    logger.warning(f"[WARN] Impure cluster detected (min={min_sim:.3f}, std={std_sim:.3f})")
+                    logger.info("[INFO] Attempting iterative bridge-aware split (thresholds 0.75 -> 0.90)")
+                    
+                    for dynamic_thresh in [0.75, 0.78, 0.81, 0.83, 0.85, 0.88, 0.90]:
+                        split_parent = {idx: idx for idx in group}
+                        def s_find(x):
+                            while split_parent[x] != x:
+                                split_parent[x] = split_parent[split_parent[x]]
+                                x = split_parent[x]
+                            return x
+                        def s_union(a, b):
+                            pa, pb = s_find(a), s_find(b)
+                            if pa != pb:
+                                split_parent[pb] = pa
+                                
+                        for i_idx, i_node in enumerate(group):
+                            for j_idx in range(i_idx + 1, len(group)):
+                                j_node = group[j_idx]
+                                if sim_matrix[i_node, j_node].item() > dynamic_thresh:
+                                    s_union(i_node, j_node)
+                                    
+                        sub_clusters_dict = {}
+                        for node in group:
+                            root = s_find(node)
+                            sub_clusters_dict.setdefault(root, []).append(node)
+                            
+                        sub_clusters = list(sub_clusters_dict.values())
+                        
+                        if len(sub_clusters) > 1:
+                            logger.info(f"[INFO] Successful split at threshold {dynamic_thresh:.2f}!")
+                            break
+                    
+                    if len(sub_clusters) > 1:
+                        sizes = [len(sc) for sc in sub_clusters]
+                        logger.info(f"[INFO] Split into {len(sub_clusters)} subclusters: sizes = {sizes}")
+                        split_sibling_registry.append(sub_clusters)
+                        pure_groups.extend(sub_clusters)
+                    else:
+                        logger.warning(f"[WARN] Split failed to divide cluster -> exploding to singletons")
+                        pure_groups.extend([[n] for n in group])
+                else:
+                    pure_groups.append(group)
+
+            final_groups = deduplicate(pure_groups)
+
+            # Build split_id map: groups from the same purity split share an id
+            split_id_map = {}  # frozenset(group) -> split_id
+            for sid, siblings in enumerate(split_sibling_registry):
+                for sib in siblings:
+                    split_id_map[frozenset(sib)] = sid
 
             assigned_nodes = set()
             for group in final_groups:
@@ -2083,6 +2158,8 @@ class ElephantEngine:
             grouped_items = [(g, False, 0.0) for g in final_groups]
             grouped_items.sort(key=lambda x: len(x[0]), reverse=True)
 
+            split_assigned_clusters = {}  # split_id -> set of cluster names already assigned
+
             for all_img_idx, is_auto, avg_w in grouped_items:
                 member_embs = [unknown_embs[i] for i in all_img_idx]
                 member_files = [unknown_files[i] for i in all_img_idx]
@@ -2091,12 +2168,26 @@ class ElephantEngine:
 
                 # Legacy Assignment logic restored for singletons
                 # Provides aggressive grouping (0.52 threshold) vs V8.2 strict threshold
+                # Build exclusion set for split siblings
+                group_key = frozenset(all_img_idx)
+                sibling_exclusions = set()
+                if group_key in split_id_map:
+                    my_split_id = split_id_map[group_key]
+                    sibling_exclusions = split_assigned_clusters.get(my_split_id, set()).copy()
+                    if sibling_exclusions:
+                        logger.info(f"[SPLIT-GUARD] Excluding sibling clusters {sibling_exclusions} from centroid match")
+
                 if len(member_embs) == 1:
                     cluster_name, score, _ = cluster_mgr.assign(member_embs[0])
                 else:
-                    cluster_name, score = cluster_mgr.assign_group(member_embs)
+                    cluster_name, score = cluster_mgr.assign_group(member_embs, exclude_clusters=sibling_exclusions)
                 decision = cluster_mgr.last_assignment.get("decision", "GROUP")
                 assignment_meta = cluster_mgr.last_assignment or {}
+
+                # Record this assignment for split tracking
+                if group_key in split_id_map:
+                    my_split_id = split_id_map[group_key]
+                    split_assigned_clusters.setdefault(my_split_id, set()).add(cluster_name)
 
                 if decision == "AMBIGUOUS" and cluster_name is None:
                     ranked = assignment_meta.get("candidates", [])

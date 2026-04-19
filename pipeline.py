@@ -433,8 +433,9 @@ def build_head_reference_bank(force_rebuild=False):
 # ==================== HEAD DETECTION ==================== #
 
 
-def detect_arrow_tip(image_bgr):
-    """Detect red arrow tip. Returns (x, y) or None."""
+def detect_arrow(image_bgr):
+    """Detect red arrow tip and direction. Returns dict or None."""
+    import math
     hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
     mask1 = cv2.inRange(hsv, ARROW_HSV_LOWER1, ARROW_HSV_UPPER1)
     mask2 = cv2.inRange(hsv, ARROW_HSV_LOWER2, ARROW_HSV_UPPER2)
@@ -451,7 +452,23 @@ def detect_arrow_tip(image_bgr):
     m = cv2.moments(largest)
     if m["m00"] == 0:
         return None
-    return (int(m["m10"] / m["m00"]), int(m["m01"] / m["m00"]))
+    cx = int(m["m10"] / m["m00"])
+    cy = int(m["m01"] / m["m00"])
+
+    eL = tuple(largest[largest[:, :, 0].argmin()][0])
+    eR = tuple(largest[largest[:, :, 0].argmax()][0])
+    eT = tuple(largest[largest[:, :, 1].argmin()][0])
+    eB = tuple(largest[largest[:, :, 1].argmax()][0])
+
+    dists = [math.hypot(x - cx, y - cy) for x, y in [eL, eR, eT, eB]]
+    dirs = ["LEFT", "RIGHT", "UP", "DOWN"]
+    pts = [eL, eR, eT, eB]
+    idx = dists.index(max(dists))
+
+    return {
+        "tip": pts[idx],
+        "direction": dirs[idx]
+    }
 
 
 def _is_valid_head_detection(det, w_img, h_img, arrow_tip=None):
@@ -807,14 +824,15 @@ def detect_and_crop_head(image_bgr, allow_fallback=True):
         print(
             f"[YOLO] No head found at full-image scales ({SCALE_CASCADE}) | img={w_orig}x{h_orig}"
         )
+        arrow_info = detect_arrow(image_bgr)
+        arrow_tip = arrow_info["tip"] if arrow_info else None
         detections = _recover_tile_detections(
             image_bgr,
             detector,
             w_orig,
             h_orig,
-            arrow_tip=detect_arrow_tip(image_bgr),
+            arrow_tip=arrow_tip,
         )
-        arrow_tip = detect_arrow_tip(image_bgr)
         if not detections:
             if not allow_fallback:
                 return None, False
@@ -845,7 +863,8 @@ def detect_and_crop_head(image_bgr, allow_fallback=True):
             reverse=True,
         )
 
-        arrow_tip = detect_arrow_tip(image_bgr)
+        arrow_info = detect_arrow(image_bgr)
+        arrow_tip = arrow_info["tip"] if arrow_info else None
         detections = [
             det
             for det in detections
@@ -913,33 +932,47 @@ def detect_and_crop_head(image_bgr, allow_fallback=True):
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
         return Image.fromarray(crop_rgb), True
 
-    # Arrow selection logic
+    # Arrow-guided direction-aware selection
     selected_bbox = None
     selected_variant = None
-    if arrow_tip is not None:
-        # Direct hit
-        direct_hits = []
+    if arrow_info is not None:
+        px, py = arrow_info["tip"]
+        direction = arrow_info["direction"]
+        
+        dir_candidates = []
         for variant in evaluated:
             x1, y1, x2, y2 = variant["bbox"]
-            px, py = arrow_tip
-            if x1 <= px <= x2 and y1 <= py <= y2:
-                direct_hits.append(variant)
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            
+            valid_dir = False
+            if direction == "DOWN" and cy > py:
+                valid_dir = True
+            elif direction == "LEFT" and cx < px:
+                valid_dir = True
+            elif direction == "RIGHT" and cx > px:
+                valid_dir = True
+            elif direction == "UP" and cy < py:
+                valid_dir = True
+                
+            direct_hit = (x1 <= px <= x2 and y1 <= py <= y2)
+            
+            if valid_dir or direct_hit:
+                import math
+                dist = math.hypot(cx - px, cy - py)
+                MIN_DIST = 80
+                
+                # Reject heads too close to the arrow tip (proximity bias fix)
+                if direct_hit or dist > MIN_DIST:
+                    dir_candidates.append((variant, dist))
 
-        if direct_hits:
-            selected_variant = max(direct_hits, key=lambda item: item["total_score"])
+        if dir_candidates:
+            # Pick the candidate closest to the arrow tip (Option A) 
+            # instead of highest YOLO score, to prevent adult-bias in overlapping scenes
+            selected_variant = min(dir_candidates, key=lambda item: item[1])[0]
             selected_bbox = selected_variant["bbox"]
 
-        # Closest center
-        if selected_bbox is None:
-
-            def center_dist(item):
-                x1, y1, x2, y2 = item["bbox"]
-                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                return np.sqrt((arrow_tip[0] - cx) ** 2 + (arrow_tip[1] - cy) ** 2)
-
-            selected_variant = min(evaluated, key=center_dist)
-            selected_bbox = selected_variant["bbox"]
-    else:
+    if selected_variant is None:
+        # Fallback if no arrow or no candidates survived the direction filter
         selected_variant = max(evaluated, key=lambda item: item["total_score"])
         selected_bbox = selected_variant["bbox"]
 

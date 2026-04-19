@@ -449,7 +449,7 @@ class ClickableImage(QLabel):
             self.setText("⚠ Image not found")
             self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         else:
-            pixmap = pixmap.scaled(220, 220, Qt.AspectRatioMode.KeepAspectRatio)
+            pixmap = pixmap.scaled(480, 480, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.setPixmap(pixmap)
 
         self.setFrameStyle(QFrame.Shape.Box)
@@ -463,9 +463,10 @@ class ClickableImage(QLabel):
         super().mousePressEvent(event)
 
 
-class ClusterImageCard(QWidget):
+class ClusterImageCard(QFrame):
     def __init__(self, img_path, is_outlier=False, label_text=""):
         super().__init__()
+        self.setObjectName("clusterCard")
         self.img_path = img_path
         self.is_outlier = is_outlier
         layout = QVBoxLayout(self)
@@ -506,12 +507,11 @@ class ClusterImageCard(QWidget):
             color = "#1B7340"  # Green normal
 
         self.setStyleSheet(f"""
-            QWidget {{
-                border: 3px solid {color};
+            QFrame#clusterCard {{
+                border: 4px solid {color};
                 border-radius: 6px;
                 background: white;
             }}
-            QLabel {{ border: none; }}
         """)
 
 def _get_display_image(img_path):
@@ -1407,85 +1407,39 @@ class ElephantApp(QMainWindow):
         merge_mode = dlg.merge_mode
 
         if merge_mode:
-            cluster_embs = None
-            if self.output_base_dir:
-                import json as _json, torch as _torch
-
-                _cf = os.path.join(self.output_base_dir, "unknown_clusters.json")
-                if os.path.exists(_cf):
-                    try:
-                        with open(_cf) as _f:
-                            _cdata = _json.load(_f)
-                        _raw = _cdata.get(cluster_name, {}).get("samples", [])
-                        if _raw:
-                            cluster_embs = _torch.stack(
-                                [_torch.tensor(s) for s in _raw]
-                            ).to(engine.device)
-                    except Exception:
-                        pass
-            if cluster_embs is not None:
-                import torch as _torch
-
-                _ex = engine.gallery.get(new_name)
-                if _ex is not None:
-                    merged = _torch.cat(
-                        [_ex["embeddings"], cluster_embs.to(engine.device)], dim=0
-                    )
-                    engine._add_to_gallery_internal(new_name, merged)
-                else:
-                    engine._add_to_gallery_internal(
-                        new_name, cluster_embs.to(engine.device)
-                    )
-
+            success, _ = engine.update_database(cluster_path, new_name)
+            if success:
                 if cluster_name in engine.gallery:
                     engine.gallery.pop(cluster_name)
-
-                engine._save_gallery_with_backup()
-                action_msg = f"Merged '{cluster_name}' into '{new_name}' ({len(cluster_embs)} embedding(s) added)."
-            else:
-                success, _ = engine.update_database(cluster_path, new_name)
-                if success:
-                    if cluster_name in engine.gallery:
-                        engine.gallery.pop(cluster_name)
-                    action_msg = f"Merged '{cluster_name}' into '{new_name}'."
-                else:
-                    QMessageBox.warning(
-                        self,
-                        "Merge Failed",
-                        f"No images found in '{cluster_path}'. Cannot merge.",
-                    )
-                    return
+                    
+                # Physically move the files to the target folder
+                target_gallery_dir = _get_gallery_cluster_path(new_name)
+                if not target_gallery_dir:
+                    target_gallery_dir = os.path.join(os.path.dirname(cluster_path), new_name)
+                
+                os.makedirs(target_gallery_dir, exist_ok=True)
+                import shutil
+                try:
+                    for item in os.listdir(cluster_path):
+                        src = os.path.join(cluster_path, item)
+                        dst = os.path.join(target_gallery_dir, item)
+                        if os.path.isdir(src):
+                            os.makedirs(dst, exist_ok=True)
+                            for sub_item in os.listdir(src):
+                                shutil.move(os.path.join(src, sub_item), os.path.join(dst, sub_item))
+                        elif os.path.isfile(src):
+                            shutil.move(src, dst)
+                    shutil.rmtree(cluster_path)
+                except Exception as e:
+                    logger.warning(f"Failed to move merged images to {target_gallery_dir}: {e}")
+                    
+                action_msg = f"Merged '{cluster_name}' into '{new_name}'."
         else:
-            cluster_embs = None
-            if self.output_base_dir:
-                import json as _json, torch as _torch
-
-                _cf = os.path.join(self.output_base_dir, "unknown_clusters.json")
-                if os.path.exists(_cf):
-                    try:
-                        with open(_cf) as _f:
-                            _cdata = _json.load(_f)
-                        _raw = _cdata.get(cluster_name, {}).get("samples", [])
-                        if _raw:
-                            cluster_embs = _torch.stack(
-                                [_torch.tensor(s) for s in _raw]
-                            ).to(engine.device)
-                    except Exception:
-                        pass
-
-            if cluster_embs is not None:
-                engine._add_to_gallery_internal(
-                    new_name, cluster_embs.to(engine.device)
-                )
+            success, _ = engine.update_database(cluster_path, new_name)
+            if success:
                 if cluster_name in engine.gallery:
                     engine.gallery.pop(cluster_name)
-                engine._save_gallery_with_backup()
-                action_msg = f"'{cluster_name}' promoted to '{new_name}' ({len(cluster_embs)} embedding(s) saved)."
-            else:
-                if cluster_name in engine.gallery:
-                    engine.gallery[new_name] = engine.gallery.pop(cluster_name)
-                    engine._save_gallery_with_backup()
-                action_msg = f"'{cluster_name}' promoted to '{new_name}'."
+            action_msg = f"'{cluster_name}' promoted to '{new_name}'."
 
         if not merge_mode:
             new_path = os.path.join(os.path.dirname(cluster_path), new_name)
@@ -2039,6 +1993,11 @@ class ElephantApp(QMainWindow):
         sec_desc.setStyleSheet(f"color: {TEXT_SECONDARY};")
         main_layout.addWidget(sec_desc)
 
+        philosophy_lbl = QLabel("🛡️ Philosophy: System prioritizes identity purity over aggressive merging.")
+        philosophy_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+        philosophy_lbl.setStyleSheet(f"color: {NEUTRAL_600}; font-style: italic; margin-bottom: 8px;")
+        main_layout.addWidget(philosophy_lbl)
+
         content_layout = QHBoxLayout()
 
         # LEFT: Cluster List
@@ -2435,28 +2394,18 @@ class ElephantApp(QMainWindow):
                     # If rejection happened AFTER the clusters' last modification, the rejection stands
                     if reject_epoch >= (max(src_mtime, tgt_mtime) - 1.0):
                         rejected_pairs.add(f"{src}_{tgt}")
-                if ambiguous_candidates_html:
-                    known_reason_lbl = QLabel(ambiguous_candidates_html)
-                    known_reason_lbl.setWordWrap(True)
-                    self.sugg_container_layout.addWidget(known_reason_lbl)
-                elif not gallery_cands:
-                    known_reason_lbl = QLabel("""
-                        <div style='background-color: #FFF5F5; padding: 12px; border-left: 4px solid #FC8181; border-radius: 4px; margin-bottom: 10px;'>
-                            <b style='color: #C53030;'>⚠️ No confident identity match</b><br><br>
-                            <span style='color: #9B2C2C; font-size: 11px;'>
-                                <b>Reason:</b><br>Available identity matches do not cross the minimum similarity threshold.
-                                <br><br>👉 Review cluster-level matches below.
-                            </span>
-                        </div>
-                    """)
-                    known_reason_lbl.setWordWrap(True)
-                    self.sugg_container_layout.addWidget(known_reason_lbl)
+                # Moved UI label generation to after Gap Analysis Filter
             except Exception as e:
                 print(f"[WARN] Failed to evaluate resilient merge decisions: {e}")
 
         valid_candidates = []
         for cand in candidates:
             target = cand.get("name")
+            if target.startswith("Unknown_"):
+                # Prevent suggesting deleted/merged ghost clusters (Size: 0 bug)
+                cpath = os.path.join(self.output_base_dir, target)
+                if not os.path.exists(cpath) or len([f for f in os.listdir(cpath) if f.lower().endswith(('.jpg', '.png'))]) == 0:
+                    continue
             if f"{cluster_name}_{target}" not in rejected_pairs:
                 valid_candidates.append(cand)
 
@@ -2493,6 +2442,14 @@ class ElephantApp(QMainWindow):
                 else:
                     gallery_cands = [top_known] # Strictly MAX 1
         # --- End of Gap Analysis Filter ---
+        
+        # --- Add Gap Analysis UI Labels ---
+        if ambiguous_candidates_html:
+            known_reason_lbl = QLabel(ambiguous_candidates_html)
+            known_reason_lbl.setWordWrap(True)
+            self.sugg_container_layout.addWidget(known_reason_lbl)
+        # ----------------------------------
+
 
         def render_candidate(idx, cand):
             target = cand.get("name")
@@ -2515,19 +2472,19 @@ class ElephantApp(QMainWindow):
             if score > 0.65 and cand.get("cohesion", 1.0) > 0.50:
                 conf_str = "✔ Likely Match"
                 color = "#1B7340"
-                why_str = f"Similarity: <b>{score:.3f}</b> — High visual overlap."
+                why_str = f"Model Confidence: High visual overlap."
             elif score > possible_threshold:
                 conf_str = "⚠ Good Possibility"
                 color = "#7A4F00"
-                why_str = f"Similarity: <b>{score:.3f}</b> — Moderate similarity."
+                why_str = f"Model Confidence: Moderate visual similarity."
             elif score > 0.20:
                 conf_str = "🤔 Needs Review"
                 color = "#B45309"
-                why_str = f"Similarity: <b>{score:.3f}</b> — Low direct similarity."
+                why_str = f"Model Confidence: Low visual similarity. Needs review."
             else:
                 conf_str = "🔍 Manual Check"
                 color = "#4B5563"
-                why_str = f"Similarity: <b>{score:.3f}</b> — Model score is low/negative."
+                why_str = f"Model Confidence: Very low similarity. Manual check required."
 
             row_widget = QWidget()
             # Main horizontal layout to hold the thumbnail on the left, details on the right
@@ -2809,20 +2766,28 @@ class ElephantApp(QMainWindow):
             was_singleton = len(imgs) == 1
 
         import time
-        with open(log_file, "a", encoding="utf-8") as f:
-            if write_header:
-                f.write(
-                    "timestamp,source,target,effective_score,direct_score,bridge_score,cohesion,was_singleton,decision\n"
-                )
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                if write_header:
+                    f.write(
+                        "timestamp,source,target,effective_score,direct_score,bridge_score,cohesion,was_singleton,decision\n"
+                    )
 
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            eff = float(candidate_data.get("effective", 0.0))
-            score = float(candidate_data.get("max_member", candidate_data.get("score", 0.0)))
-            bridge = float(candidate_data.get("bridge_score", 0.0))
-            coh = float(candidate_data.get("cohesion", 1.0))
-            f.write(
-                f"{ts},{source},{target},{eff:.4f},{score:.4f},{bridge:.4f},{coh:.4f},{was_singleton},{decision}\n"
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                eff = float(candidate_data.get("effective", 0.0))
+                score = float(candidate_data.get("max_member", candidate_data.get("score", 0.0)))
+                bridge = float(candidate_data.get("bridge_score", 0.0))
+                coh = float(candidate_data.get("cohesion", 1.0))
+                f.write(
+                    f"{ts},{source},{target},{eff:.4f},{score:.4f},{bridge:.4f},{coh:.4f},{was_singleton},{decision}\n"
+                )
+        except PermissionError:
+            QMessageBox.critical(
+                self, 
+                "Log File Locked", 
+                f"Cannot write to merge_decisions.csv!\n\nPlease close the file in Excel or any other program viewing it, then try again."
             )
+            raise RuntimeError("Log file is locked.")
 
     def _merge_unknown_clusters(self, source_cluster, target_cluster, cand=None):
         if not source_cluster or not target_cluster or not self.output_base_dir:
@@ -2978,7 +2943,21 @@ class ElephantApp(QMainWindow):
             if os.path.exists(w.img_path):
                 temp_path = os.path.join(review_buffer, os.path.basename(w.img_path))
                 shutil.move(w.img_path, temp_path)
-                self._last_removed.append({"src": w.img_path, "temp": temp_path})
+                
+                # Move associated crop if it exists
+                src_crop = os.path.join(os.path.dirname(w.img_path), ".crops", os.path.basename(w.img_path))
+                temp_crop_dir = os.path.join(review_buffer, ".crops")
+                temp_crop = os.path.join(temp_crop_dir, os.path.basename(w.img_path))
+                
+                op = {"src": w.img_path, "temp": temp_path, "src_crop": None, "temp_crop": None}
+                
+                if os.path.exists(src_crop):
+                    os.makedirs(temp_crop_dir, exist_ok=True)
+                    shutil.move(src_crop, temp_crop)
+                    op["src_crop"] = src_crop
+                    op["temp_crop"] = temp_crop
+
+                self._last_removed.append(op)
 
         self.undo_btn.setEnabled(bool(self._last_removed))
 
@@ -2996,6 +2975,11 @@ class ElephantApp(QMainWindow):
             src, temp = op["src"], op["temp"]
             if os.path.exists(temp):
                 shutil.move(temp, src)
+            
+            src_crop, temp_crop = op.get("src_crop"), op.get("temp_crop")
+            if temp_crop and os.path.exists(temp_crop):
+                os.makedirs(os.path.dirname(src_crop), exist_ok=True)
+                shutil.move(temp_crop, src_crop)
 
         self._last_removed = []
         self.undo_btn.setEnabled(False)
@@ -3072,9 +3056,56 @@ class ElephantApp(QMainWindow):
             return
 
         record_id = self.current_ambiguity_record.get("id")
-        print(
-            f"Cluster split: {self.current_ambiguity_record.get('current_cluster')} (ID: {record_id})"
-        )
+        cluster_name = self.current_ambiguity_record.get('current_cluster')
+        
+        cluster_path = os.path.join(self.output_base_dir, cluster_name)
+        if not os.path.exists(cluster_path): return
+        
+        images = [f for f in sorted(os.listdir(cluster_path)) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+        if len(images) <= 1:
+            QMessageBox.information(self, "Split Cluster", "Cluster already has only one image.")
+            return
+
+        print(f"Cluster split: {cluster_name} (ID: {record_id})")
+        
+        import shutil
+        import re
+        
+        # Helper to find next unknown cluster integer
+        existing = [d for d in os.listdir(self.output_base_dir) if d.startswith("Unknown_") and os.path.isdir(os.path.join(self.output_base_dir, d))]
+        highest = 0
+        for d in existing:
+            match = re.match(r"Unknown_(\d+)", d)
+            if match:
+                highest = max(highest, int(match.group(1)))
+        
+        next_id = highest + 1
+
+        # Break all except the first one into new clusters
+        for img in images[1:]:
+            new_dir = os.path.join(self.output_base_dir, f"Unknown_{next_id}")
+            os.makedirs(new_dir, exist_ok=True)
+            
+            src = os.path.join(cluster_path, img)
+            dst = os.path.join(new_dir, img)
+            shutil.move(src, dst)
+            print(f"Moved {img} to {new_dir}")
+            
+            # Move associated crop so UI head preview stays tight
+            src_crop = os.path.join(cluster_path, ".crops", img)
+            dst_crop_dir = os.path.join(new_dir, ".crops")
+            if os.path.exists(src_crop):
+                os.makedirs(dst_crop_dir, exist_ok=True)
+                shutil.move(src_crop, os.path.join(dst_crop_dir, img))
+                
+            next_id += 1
+            
+        # Re-register with the engine cache to keep UI consistent
+        try:
+            self.engine.update_database(self.output_base_dir)
+        except Exception:
+            pass
+
         if self.review_store and record_id:
             try:
                 resolution = self._apply_ambiguity_resolution(
@@ -3082,8 +3113,8 @@ class ElephantApp(QMainWindow):
                 )
                 self.review_store.resolve_ambiguity(record_id, resolution)
             except Exception as e:
-                QMessageBox.warning(self, "Resolution Failed", str(e))
-                return
+                pass
+        
         self.load_ambiguity_inbox()
         self.load_gallery()
 

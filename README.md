@@ -1,10 +1,11 @@
 # 🐘 Elephant Re-Identification System
 
-> **Wildlife Institute of India (WII) — Unique Elephant Identification**  
+> **Strict Confidentiality:** Field tracking images, model checkpoints, embedding states, and training notebooks are explicitly excluded from version control.
+
 > **Current Model:** V8.2 · ConvNeXt-Tiny · 128-D embeddings  
 > **Stack:** Python · PyTorch · YOLOv8 · PyQt6
 
-**Built a graph-based, human-in-the-loop elephant re-identification system, currently in the calibration phase to make similarity-based decisions reliable and scalable.**
+**Built a graph-based, human-in-the-loop elephant re-identification system designed as a risk-aware, decision-support pipeline for field researchers.**
 
 ---
 
@@ -79,30 +80,19 @@ Build a robust Elephant Re-Identification System that can:
 - Relative similarity (rank within cluster)
 - Improved suggestion quality
 
-### ⚠️ Phase 3C — Calibration & Reliability (ONGOING)
+### ✅ Phase 3C — Calibration & Reliability (DONE)
 
-**Goal:** Make the system trustworthy and data-driven.
-
-**Implemented:**
 - Decision logging (`merge_decisions.csv`)
 - Scores: direct similarity, bridge strength, cluster cohesion
 - Bounded scoring (no overconfidence)
-- Confidence hints (Safe / Review / Weak)
+- Safety threshold validation
 
-**In Progress:**
-- Collecting real user decisions
-- Running analyzer on score distributions
-- Deriving safe threshold and reject threshold
-- Validating precision (how reliable "safe merge" is)
+### ✅ Phase 4 — Semi-Automation Ecosystem (DONE)
 
-### 🔵 Phase 4 — Semi-Automation (NEXT)
-
-**Goal:** Reduce manual effort.
-
-- Auto-merge high-confidence clusters
-- Priority-based review queue
-- Confidence tiers (Safe / Review / Weak)
-- Human focuses only on uncertain cases
+- Gap-analysis confidence filters
+- Safety-first UI blocks (Single image warnings)
+- Identity purity protection (defer to human authority)
+- Abstracted technical UI for non-engineers
 
 ### 🔵 Phase 5 — System Maturity (FUTURE)
 
@@ -169,4 +159,5 @@ Build a robust Elephant Re-Identification System that can:
 
 ---
 
-**Wildlife Institute of India Research Project**
+**Independent Research Project**
+*Unauthorized distribution of field metadata or model weights is strictly prohibited.*

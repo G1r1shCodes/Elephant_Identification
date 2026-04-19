@@ -48,3 +48,12 @@ build/
 *.egg-info/
 
 gallery_references/
+
+# Images & Confidential Media
+*.jpg
+*.jpeg
+*.png
+*.bmp
+
+# Notebooks & Experiments
+*.ipynb
