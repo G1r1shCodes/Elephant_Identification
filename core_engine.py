@@ -357,10 +357,10 @@ class UnknownClusterManager:
     MERGE_THRESHOLD (0.78) cosine similarity are merged.
     """
 
-    STRONG_THRESHOLD = 0.72  # direct assign  (prioritize purity)
-    WEAK_THRESHOLD = 0.60  # enter sample-verify zone
-    SAMPLE_VERIFY_THRESHOLD = 0.65  # max sample sim required
-    MERGE_THRESHOLD = 0.72  # post-batch centroid merge check
+    STRONG_THRESHOLD = 0.80  # direct assign  (prioritize purity)
+    WEAK_THRESHOLD = 0.70  # enter sample-verify zone
+    SAMPLE_VERIFY_THRESHOLD = 0.75  # max sample sim required
+    MERGE_THRESHOLD = 0.82  # post-batch centroid merge check
     MAX_SAMPLES = 10  # stored representatives per cluster
 
     def __init__(
@@ -1305,21 +1305,20 @@ class ElephantEngine:
                 k = min(3, len(sims))
                 score = float(torch.topk(sims, k).values.mean())
 
-            # Group Consistency Gate
+            # Extract Score and Cohesion directly
+            cohesion = score
             all_embs = data.get("embeddings")
             if all_embs is not None and len(all_embs) > 0:
                 sims = torch.mv(all_embs, query_emb)
                 top3 = torch.sort(sims, descending=True).values[:3]
-
-                if len(top3) > 1 and top3[0] > 0.65 and top3[1] < 0.45:
-                    score *= 0.7  # Single strong match rejection
-                elif len(top3) < 2 or float(top3.mean()) < 0.52:
-                    score *= 0.6  # Consistency rejection
+                score = float(top3[0])
+                cohesion = float(top3.mean()) if len(top3) >= 2 else float(top3[0])
 
             distances.append(
                 {
                     "name": identity,
                     "score": score,
+                    "cohesion": cohesion,
                     "adaptive_thr": data.get("adaptive_thr", DIST_STRICT),
                 }
             )
@@ -1334,11 +1333,6 @@ class ElephantEngine:
         valid_scores = [d["score"] for d in distances if d["score"] > 0.1]
         gap = valid_scores[0] - valid_scores[1] if len(valid_scores) >= 2 else 0.0
 
-        import numpy as np
-
-        global_mean = float(np.mean([d["score"] for d in distances]))
-        req_score = max(0.78, global_mean + 0.20)
-
         # Same herd ambiguity check
         same_herd_ambiguity = False
         if len(distances) >= 2 and gap < 0.10:
@@ -1352,10 +1346,22 @@ class ElephantEngine:
 
         score_pct = max(0, min(100, int(best_score * 100)))
 
-        if best_score > req_score and gap > 0.10 and not same_herd_ambiguity:
+        HIGH_CONF = 0.88
+        CANDIDATE = 0.75
+        MARGIN = 0.05
+        MIN_COHESION = 0.50
+
+        cohesion = top.get("cohesion", best_score)
+        
+        if best_score >= HIGH_CONF:
             label = top["name"]
+        elif best_score >= CANDIDATE:
+            if gap >= MARGIN and cohesion >= MIN_COHESION and not same_herd_ambiguity:
+                label = top["name"]
+            else:
+                label = "Unknown"  # Push to review
         else:
-            label = "Unknown"
+            label = "Unknown"  # Push to review
 
         return {
             "label": label,
@@ -1534,6 +1540,39 @@ class ElephantEngine:
                 "count": int(cluster.get("count", len(cluster.get("samples", [])))),
             }
 
+        # ── Phase 1.5: Encompass Gallery Identities for Merges ────────────
+        for identity_name, data in self.gallery.items():
+            if identity_name == exclude_cluster:
+                continue
+
+            target_samples = data.get("embeddings", [])
+            if not isinstance(target_samples, list):
+                if hasattr(target_samples, 'shape'):
+                    target_samples = [emb for emb in target_samples]
+
+            max_sim = -1.0
+            for s_emb in source_samples:
+                for t_emb in target_samples:
+                    if hasattr(t_emb, "to"):
+                        t_emb = t_emb.to(s_emb.device)
+                    sim = float(torch.dot(s_emb, t_emb))
+                    if sim > max_sim:
+                        max_sim = sim
+
+            # Base centroid approx (use best sample as proxy if no real centroid)
+            centroid_sim = max_sim
+            raw_candidates[identity_name] = {
+                "name": identity_name,
+                "score": max_sim,
+                "max_member": max_sim,
+                "centroid_sim": centroid_sim,
+                "bridge_path": "",
+                "bridge_score": 0.0,
+                "effective": max_sim,
+                "cohesion": 1.0, # Known gallery items are treated as perfectly cohesive
+                "count": len(target_samples),
+            }
+
         # ── Phase 2: Bridge path detection ────────────────────────────────
         # If source→X is strong and X→target is strong, boost target's score
         # even when source→target is weak (pose variance bypass)
@@ -1577,16 +1616,25 @@ class ElephantEngine:
 
         # ── Phase 3: Effective score = max(direct, bridge) ────────────────
         for cand in raw_candidates.values():
-            cand["effective"] = max(cand["max_member"], cand["bridge_score"])
+            if cand["max_member"] < 0:
+                cand["effective"] = cand["max_member"]  # Preserve negative scores instead of flattening to 0 via bridge max
+            else:
+                cand["effective"] = max(cand["max_member"], cand["bridge_score"])
 
-        candidates = sorted(
+        all_cands = sorted(
             raw_candidates.values(), key=lambda x: x["effective"], reverse=True
         )
+        
+        # Guarantee all Unknown clusters are passed to the UI, regardless of rank
+        unknown_cands = [c for c in all_cands if str(c["name"]).startswith("Unknown_")]
+        gallery_cands = [c for c in all_cands if not str(c["name"]).startswith("Unknown_")]
+        
+        candidates = unknown_cands + gallery_cands[:30]
 
         # Debug: print all candidate scores for diagnosis
         if candidates:
             print(f"\n[DEBUG] _rank_review_candidates for exclude={exclude_cluster}")
-            for c in candidates:
+            for c in candidates[:15]:  # limit terminal spam
                 tag = ""
                 if c["bridge_score"] > c["max_member"]:
                     tag = f" [BRIDGE BOOST: {c['bridge_path']}]"
@@ -1596,9 +1644,9 @@ class ElephantEngine:
                     f"| effective={c['effective']:.4f} "
                     f"| count={c['count']}{tag}"
                 )
-            print(f"  Returning top 5: {[c['name'] for c in candidates[:5]]}")
+            print(f"  Returning {len(unknown_cands)} unknowns + top gallery matches.")
 
-        return candidates[:5]
+        return candidates
 
     def _rebuild_unknown_cluster_from_folder(
         self, cluster_mgr, base_output_folder, cluster_name
@@ -1840,9 +1888,12 @@ class ElephantEngine:
                     ~torch.eye(N, dtype=torch.bool, device=sim_matrix.device)
                 ]
                 logger.info("\n[DEBUG] Similarity Stats:")
-                logger.info(
-                    f"  mean={sims.mean():.3f} | std={sims.std():.3f} | min={sims.min():.3f} | max={sims.max():.3f}"
-                )
+                if sims.numel() > 0:
+                    logger.info(
+                        f"  mean={sims.mean():.3f} | std={sims.std():.3f} | min={sims.min():.3f} | max={sims.max():.3f}"
+                    )
+                else:
+                    logger.info("  Not enough images for pairwise similarity stats")
                 logger.info("\n[DEBUG] Top-3 neighbors per image:")
                 for i in range(N):
                     row = sim_matrix[i].clone()
@@ -1964,16 +2015,16 @@ class ElephantEngine:
                 if len(comp) <= 2:
                     return [[x] for x in comp]
 
+                # Structural integrity check: A node must have at least one relatively strong 
+                # neighbor (>= 0.65) to formally belong to a group, preventing bridging artifacts.
                 refined = []
                 leftovers = []
+                
                 for node in comp:
-                    sims = [
-                        sim_matrix[node, other].item()
-                        for other in comp
-                        if other != node
-                    ]
-                    avg_sim = sum(sims) / len(sims)
-                    if avg_sim > 0.50:
+                    peer_sims = [sim_matrix[node, other].item() for other in comp if other != node]
+                    max_peer_sim = max(peer_sims) if peer_sims else 0.0
+                    
+                    if max_peer_sim >= 0.52:
                         refined.append(node)
                     else:
                         leftovers.append(node)
@@ -2038,15 +2089,13 @@ class ElephantEngine:
                 member_paths = [unknown_paths[i] for i in all_img_idx]
                 member_crops = [unknown_crops[i] for i in all_img_idx]
 
-                # Cross-session persistent assignment
-                # Use sample-based assign_group for multi-image groups
-                if len(member_embs) >= 2:
-                    cluster_name, score = cluster_mgr.assign_group(member_embs)
-                    decision = cluster_mgr.last_assignment.get("decision", "GROUP")
+                # Legacy Assignment logic restored for singletons
+                # Provides aggressive grouping (0.52 threshold) vs V8.2 strict threshold
+                if len(member_embs) == 1:
+                    cluster_name, score, _ = cluster_mgr.assign(member_embs[0])
                 else:
-                    cluster_name, score, decision = cluster_mgr.assign(
-                        member_embs[0], input_id=member_files[0]
-                    )
+                    cluster_name, score = cluster_mgr.assign_group(member_embs)
+                decision = cluster_mgr.last_assignment.get("decision", "GROUP")
                 assignment_meta = cluster_mgr.last_assignment or {}
 
                 if decision == "AMBIGUOUS" and cluster_name is None:
@@ -2070,24 +2119,15 @@ class ElephantEngine:
                         member_paths, member_files, member_crops, member_embs
                     ):
                         target_path = os.path.join(cluster_folder, fname)
-                        if crop_rgb is not None:
-                            try:
-                                self._stamp_watermark_image(
-                                    crop_rgb, target_path,
-                                    target_cluster_name,
-                                    round((c1.get("score", 0.0) + 1) / 2 * 100, 1),
-                                )
-                            except Exception:
-                                try:
-                                    crop_rgb.save(target_path)
-                                except Exception:
-                                    pass
-                        else:
-                            import shutil
-                            try:
-                                shutil.copy(fpath, target_path)
-                            except Exception:
-                                pass
+                        import shutil
+                        try:
+                            shutil.copy(fpath, target_path)
+                            if crop_rgb is not None:
+                                crop_dir = os.path.join(cluster_folder, ".crops")
+                                os.makedirs(crop_dir, exist_ok=True)
+                                crop_rgb.save(os.path.join(crop_dir, fname))
+                        except Exception as e:
+                            logger.error(f"Failed to copy original image {fname}: {e}")
 
                         # Add embedding to cluster so suggestions work
                         cluster_mgr._add_to_cluster(target_cluster_name, emb)
@@ -2124,20 +2164,15 @@ class ElephantEngine:
                 for fpath, fname, crop_rgb in zip(
                     member_paths, member_files, member_crops
                 ):
-                    if crop_rgb is not None:
-                        self._stamp_watermark_image(
-                            crop_rgb,
-                            os.path.join(cluster_folder, fname),
-                            cluster_name,
-                            cluster_score_pct,
-                        )
-                    else:
-                        self._stamp_watermark(
-                            fpath,
-                            os.path.join(cluster_folder, fname),
-                            cluster_name,
-                            cluster_score_pct,
-                        )
+                    import shutil
+                    try:
+                        shutil.copy(fpath, os.path.join(cluster_folder, fname))
+                        if crop_rgb is not None:
+                            crop_dir = os.path.join(cluster_folder, ".crops")
+                            os.makedirs(crop_dir, exist_ok=True)
+                            crop_rgb.save(os.path.join(crop_dir, fname))
+                    except Exception as e:
+                        logger.error(f"Failed to copy original image {fname}: {e}")
 
                 batch_additions[cluster_name] = batch_additions.get(
                     cluster_name, 0
@@ -2437,14 +2472,21 @@ class ElephantEngine:
                     f"    Reason: mean_sim={m['mean_sim']:.3f}, strong_edges={m['strong_edges']}"
                 )
 
-                proposed_merges[f"{m['cluster_a']}_{m['cluster_b']}"] = {
+                key = f"{m['cluster_a']}_{m['cluster_b']}"
+                if key not in proposed_merges:
+                    proposed_merges[key] = []
+                
+                proposed_merges[key].append({
                     "type": "structural_merge",
                     "cluster_a": m["cluster_a"],
                     "cluster_b": m["cluster_b"],
+                    "avg_weight": m["mean_sim"], # For app.py UI
+                    "min_weight": m.get("min_sim", 0.0), # For app.py UI
+                    "n_merged": 2,
                     "mean_sim": m["mean_sim"],
                     "strong_edges": m["strong_edges"],
                     "confidence": m["confidence"],
-                }
+                })
 
         if progress_callback:
             progress_callback(95)

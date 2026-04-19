@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QSplitter,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QUrl
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QUrl, QRect
 from PyQt6.QtGui import (
     QIcon,
     QAction,
@@ -364,8 +364,8 @@ class CompareMergeDialog(QDialog):
             "background: #FEE2E2; color: #9B1C1C; font-weight: bold; border-radius: 4px; padding: 8px 16px;"
         )
         reject_sugg.clicked.connect(
-            self.reject
-        )  # Treat as cancel for now, could emit specific reject signal
+            lambda: self.done(2)
+        )
 
         merge_btn = QPushButton(f"Yes, Merge into {cluster_b}")
         merge_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -387,7 +387,13 @@ class CompareMergeDialog(QDialog):
 
     def _load_images(self, layout, cluster_name):
         path = os.path.join(self.base_dir, cluster_name)
+        if not os.path.exists(path) and not cluster_name.startswith("Unknown_"):
+            g_path = _get_gallery_cluster_path(cluster_name)
+            if g_path:
+                path = g_path
+
         if not os.path.exists(path):
+            layout.addWidget(QLabel("No images found."))
             return
 
         images = [
@@ -407,7 +413,7 @@ class CompareMergeDialog(QDialog):
         for i, img in enumerate(images[:6]):  # Limit to 6 previews per side
             lbl = QLabel()
             img_path = os.path.abspath(os.path.join(path, img))
-            pix = QPixmap(img_path)
+            pix = QPixmap(_get_display_image(img_path))
 
             if pix.isNull():
                 print(f"[ERROR] Failed to load: {img_path}")
@@ -437,7 +443,7 @@ class ClickableImage(QLabel):
         self.is_outlier = is_outlier
         self.selected = False
 
-        pixmap = QPixmap(self.img_path)
+        pixmap = QPixmap(_get_display_image(self.img_path))
         if pixmap.isNull():
             print(f"[ERROR] Failed to load: {self.img_path}")
             self.setText("⚠ Image not found")
@@ -508,6 +514,22 @@ class ClusterImageCard(QWidget):
             QLabel {{ border: none; }}
         """)
 
+def _get_display_image(img_path):
+    """Attempt to load the zoomed head crop for UI grids; fallback to original image."""
+    crop_path = os.path.join(os.path.dirname(img_path), ".crops", os.path.basename(img_path))
+    return crop_path if os.path.exists(crop_path) else img_path
+
+def _get_gallery_cluster_path(target_name):
+    """
+    Locates an elephant's gallery images strictly from the standalone packaged 
+    'gallery_references' directory, suitable for offline application bundling.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    ref_dir = os.path.join(base_dir, "gallery_references", target_name)
+    
+    if os.path.exists(ref_dir) and os.path.isdir(ref_dir):
+        return ref_dir
+    return None
 
 class AmbiguousCard(QWidget):
     def __init__(self, item, controller, parent=None):
@@ -552,7 +574,7 @@ class AmbiguousCard(QWidget):
         img_label.setMinimumSize(320, 320)
 
         if os.path.exists(img_path):
-            pixmap = QPixmap(img_path).scaled(
+            pixmap = QPixmap(_get_display_image(img_path)).scaled(
                 400,
                 400,
                 Qt.AspectRatioMode.KeepAspectRatio,
@@ -586,7 +608,7 @@ class AmbiguousCard(QWidget):
             if not os.path.exists(img_path):
                 continue
             img_label = QLabel()
-            pixmap = QPixmap(img_path).scaled(
+            pixmap = QPixmap(_get_display_image(img_path)).scaled(
                 120,
                 120,
                 Qt.AspectRatioMode.KeepAspectRatio,
@@ -1727,14 +1749,16 @@ class ElephantApp(QMainWindow):
             for img_name in sorted(os.listdir(path)):
                 if img_name.lower().endswith((".jpg", ".jpeg", ".png")):
                     img_path = os.path.join(path, img_name)
-                    item = QListWidgetItem(QIcon(img_path), img_name)
+                    display_path = _get_display_image(img_path)
+                    item = QListWidgetItem(QIcon(display_path), img_name)
                     item.setData(Qt.ItemDataRole.UserRole, img_path)
                     self.gallery_view.addItem(item)
             self._update_cluster_review_panel(os.path.basename(path), path)
         else:
             # Individual file node — just highlight/open it
             self.gallery_view.clear()
-            item = QListWidgetItem(QIcon(path), os.path.basename(path))
+            display_path = _get_display_image(path)
+            item = QListWidgetItem(QIcon(display_path), os.path.basename(path))
             item.setData(Qt.ItemDataRole.UserRole, path)
             self.gallery_view.addItem(item)
             self._update_cluster_review_panel(
@@ -2306,9 +2330,7 @@ class ElephantApp(QMainWindow):
             # from hiding valid merge candidates (e.g. Unknown_3 for Unknown_4).
             try:
                 for d in os.listdir(self.output_base_dir):
-                    if d.startswith("Unknown_") and os.path.isdir(
-                        os.path.join(self.output_base_dir, d)
-                    ):
+                    if d.startswith("Unknown_") and os.path.isdir(os.path.join(self.output_base_dir, d)):
                         if d not in mgr.clusters:
                             print(f"[SYNC] Rebuilding missing cluster: {d}")
                             self._rebuild_cluster_from_folder(mgr, d)
@@ -2352,7 +2374,7 @@ class ElephantApp(QMainWindow):
                     source_samples=source_samples
                 )
                 if ranked:
-                    candidates = ranked[:5]
+                    candidates = ranked[:20] # Grab more to ensure we have enough of both types
 
         if not candidates:
             lbl = QLabel("No similar clusters found.")
@@ -2364,72 +2386,194 @@ class ElephantApp(QMainWindow):
         # Show ALL candidates returned by _rank_review_candidates (already top-5).
         # Don't filter by score threshold — extreme pose variance can produce
         # negative/low cosine similarity between genuine same-identity images.
-        valid_candidates = candidates
+        
+        # Load historically rejected merges, but EXPIRE the rejection if either 
+        # cluster has been modified (e.g. gained a new image) since the rejection.
+        rejected_pairs = set()
+        log_file = os.path.join(self.output_base_dir, "merge_decisions.csv")
+        if os.path.exists(log_file):
+            try:
+                from datetime import datetime
+                
+                # Helper to get the most recent modification time of a cluster
+                def get_cluster_mtime(cname):
+                    cpath = os.path.join(self.output_base_dir, cname)
+                    if not os.path.exists(cpath):
+                        return 0
+                    mtimes = [os.path.getmtime(cpath)]
+                    for f in os.listdir(cpath):
+                        fpath = os.path.join(cpath, f)
+                        if os.path.isfile(fpath):
+                            mtimes.append(os.path.getmtime(fpath))
+                    return max(mtimes)
 
-        for i, cand in enumerate(valid_candidates):
+                latest_rejections = {}
+                with open(log_file, "r", encoding="utf-8") as f:
+                    for line in f.readlines():
+                        parts = line.strip().split(",")
+                        if len(parts) >= 9:
+                            if parts[0] == "timestamp": continue
+                            ts_str, src, tgt, dec = parts[0], parts[1], parts[2], parts[8]
+                            dec_lower = dec.strip().lower()
+                            if dec_lower in ("reject", "rejected"):
+                                try:
+                                    dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                                    reject_epoch = dt.timestamp()
+                                    latest_rejections[(src, tgt)] = reject_epoch
+                                    latest_rejections[(tgt, src)] = reject_epoch
+                                except ValueError:
+                                    pass
+                            elif dec_lower == "merged":
+                                # If it was subsequently merged, clear the rejection track
+                                if (src, tgt) in latest_rejections: del latest_rejections[(src, tgt)]
+                                if (tgt, src) in latest_rejections: del latest_rejections[(tgt, src)]
+                
+                # Evaluate if rejections are still fresh
+                for (src, tgt), reject_epoch in latest_rejections.items():
+                    src_mtime = get_cluster_mtime(src)
+                    tgt_mtime = get_cluster_mtime(tgt)
+                    # If rejection happened AFTER the clusters' last modification, the rejection stands
+                    if reject_epoch >= (max(src_mtime, tgt_mtime) - 1.0):
+                        rejected_pairs.add(f"{src}_{tgt}")
+                if ambiguous_candidates_html:
+                    known_reason_lbl = QLabel(ambiguous_candidates_html)
+                    known_reason_lbl.setWordWrap(True)
+                    self.sugg_container_layout.addWidget(known_reason_lbl)
+                elif not gallery_cands:
+                    known_reason_lbl = QLabel("""
+                        <div style='background-color: #FFF5F5; padding: 12px; border-left: 4px solid #FC8181; border-radius: 4px; margin-bottom: 10px;'>
+                            <b style='color: #C53030;'>⚠️ No confident identity match</b><br><br>
+                            <span style='color: #9B2C2C; font-size: 11px;'>
+                                <b>Reason:</b><br>Available identity matches do not cross the minimum similarity threshold.
+                                <br><br>👉 Review cluster-level matches below.
+                            </span>
+                        </div>
+                    """)
+                    known_reason_lbl.setWordWrap(True)
+                    self.sugg_container_layout.addWidget(known_reason_lbl)
+            except Exception as e:
+                print(f"[WARN] Failed to evaluate resilient merge decisions: {e}")
+
+        valid_candidates = []
+        for cand in candidates:
             target = cand.get("name")
-            score = cand.get(
-                "max_member", 0.0
-            )  # Use the raw visual similarity instead of penalized score for the UI
+            if f"{cluster_name}_{target}" not in rejected_pairs:
+                valid_candidates.append(cand)
+
+        if not valid_candidates and candidates:
+            lbl = QLabel("All found suggestions were previously rejected.")
+            lbl.setStyleSheet("color: #4B5563; font-size: 11px;")
+            self.sugg_container_layout.addWidget(lbl)
+            self.current_suggestion = None
+            return
+
+        # --- Start of Gap Analysis Filter ---
+        all_cands_sorted = sorted(valid_candidates, key=lambda c: c.get("max_member", 0.0), reverse=True)
+        unknown_cands = [c for c in all_cands_sorted if str(c.get("name", "")).startswith("Unknown_")]
+        raw_gallery_cands = [c for c in all_cands_sorted if not str(c.get("name", "")).startswith("Unknown_")]
+
+        gallery_cands = []
+        hide_known_reason = ""
+        ambiguous_candidates_html = ""
+
+        if raw_gallery_cands:
+            top_known = raw_gallery_cands[0]
+            top_score = top_known.get("max_member", 0.0)
+            
+            all_other_scores = [c for c in all_cands_sorted if c.get("name") != top_known.get("name") and not str(c.get("name", "")).startswith("Unknown_")]
+            second_best_score = all_other_scores[0].get("max_member", 0.0) if all_other_scores else 0.0
+            
+            if top_score >= 0.70:
+                if (top_score - second_best_score) < 0.05:
+                    hide_known_reason = "Multiple candidates have similar scores.<br>Model cannot distinguish identity reliably."
+                    
+                    # Show up to top 3 conflicting candidates as actionable widgets!
+                    top_list = [top_known] + all_other_scores[:2]
+                    gallery_cands = top_list # Provide the conflicting candidates directly to the UI renderer
+                else:
+                    gallery_cands = [top_known] # Strictly MAX 1
+        # --- End of Gap Analysis Filter ---
+
+        def render_candidate(idx, cand):
+            target = cand.get("name")
+            score = cand.get("max_member", 0.0)
 
             # Get target composition
             target_path = os.path.join(self.output_base_dir, target)
             comp_str = ""
             if os.path.exists(target_path):
-                t_imgs = sorted(
-                    [
-                        f
-                        for f in os.listdir(target_path)
-                        if f.lower().endswith((".jpg", ".png", ".jpeg"))
-                    ]
-                )
+                t_imgs = sorted([f for f in os.listdir(target_path) if f.lower().endswith((".jpg", ".png", ".jpeg"))])
                 count = len(t_imgs)
                 if count == 1:
                     comp_str = "<br><span style='color:#9B1C1C; font-size:10px;'>Cluster size: 1 (singleton ⚠️)</span>"
                 else:
                     preview = ", ".join(t_imgs[:2]) + ("..." if count > 2 else "")
-                    comp_str = f"<br><span style='color:#6B7280; font-size:10px;'>Cluster size: {count} (stable) &bull; {preview}</span>"
+                    comp_str = f"<br><span style='color:#6B7280; font-size:10px;'>Size: {count} &bull; {preview}</span>"
 
             possible_threshold = 0.48 if is_singleton else 0.52
 
             if score > 0.65 and cand.get("cohesion", 1.0) > 0.50:
                 conf_str = "✔ Likely Match"
                 color = "#1B7340"
-                why_str = f"Similarity: <b>{score:.3f}</b> — High visual overlap. Likely the same identity."
+                why_str = f"Similarity: <b>{score:.3f}</b> — High visual overlap."
             elif score > possible_threshold:
                 conf_str = "⚠ Good Possibility"
                 color = "#7A4F00"
-                why_str = f"Similarity: <b>{score:.3f}</b> — Moderate similarity. Check for matching features (ears/tusks)."
+                why_str = f"Similarity: <b>{score:.3f}</b> — Moderate similarity."
             elif score > 0.20:
                 conf_str = "🤔 Needs Review"
                 color = "#B45309"
-                why_str = f"Similarity: <b>{score:.3f}</b> — Low direct similarity. 👉 <b>Please compare visually before rejecting.</b>"
+                why_str = f"Similarity: <b>{score:.3f}</b> — Low direct similarity."
             else:
                 conf_str = "🔍 Manual Check"
                 color = "#4B5563"
-                why_str = f"Similarity: <b>{score:.3f}</b> — Model score is low/negative. <b>Manual verification required.</b>"
-
-            bridge = cand.get("bridge_path", "")
-            if bridge and score <= 0.65:
-                why_str += f"<br>🔗 <b>Bridge path:</b> <span style='font-family:monospace; background:#F3F4F6; padding:2px; border-radius:2px; color:#4B5563;'>{bridge}</span>"
-
-            if i == 0:
-                rank_lbl = QLabel("<b>TOP MATCH</b>")
-                rank_lbl.setStyleSheet(
-                    "color: #111827; font-size: 11px; margin-top: 4px; letter-spacing: 1px;"
-                )
-                self.sugg_container_layout.addWidget(rank_lbl)
-            elif i == 1:
-                rank_lbl = QLabel("<b>OTHER POSSIBILITIES</b>")
-                rank_lbl.setStyleSheet(
-                    "color: #6B7280; font-size: 11px; margin-top: 8px; letter-spacing: 1px;"
-                )
-                self.sugg_container_layout.addWidget(rank_lbl)
+                why_str = f"Similarity: <b>{score:.3f}</b> — Model score is low/negative."
 
             row_widget = QWidget()
-            row_layout = QVBoxLayout(row_widget)
-            row_layout.setContentsMargins(4, 4, 4, 10)
-            row_layout.setSpacing(6)
+            # Main horizontal layout to hold the thumbnail on the left, details on the right
+            main_h_layout = QHBoxLayout(row_widget)
+            main_h_layout.setContentsMargins(4, 4, 4, 10)
+            main_h_layout.setSpacing(10)
+
+            # --- Thumbnail generation ---
+            thumb_lbl = QLabel()
+            thumb_lbl.setFixedSize(60, 60)
+            thumb_lbl.setStyleSheet("border-radius: 4px; border: 1px solid #D1D5DB; background: #F3F4F6;")
+            thumb_lbl.setScaledContents(True)
+            
+            thumb_path = None
+            if os.path.exists(target_path):
+                t_imgs = sorted([f for f in os.listdir(target_path) if f.lower().endswith((".jpg", ".png", ".jpeg"))])
+                if t_imgs:
+                    thumb_path = os.path.join(target_path, t_imgs[0])
+            elif not target.startswith("Unknown_"):
+                # Gallery image fallback
+                cat_folder = os.path.join(self.output_base_dir, target)
+                if os.path.exists(cat_folder):
+                    c_imgs = sorted([f for f in os.listdir(cat_folder) if f.lower().endswith((".jpg", ".png", ".jpeg"))])
+                    if c_imgs:
+                        thumb_path = os.path.join(cat_folder, c_imgs[0])
+                else:
+                    g_folder = _get_gallery_cluster_path(target)
+                    if g_folder:
+                        c_imgs = sorted([f for f in os.listdir(g_folder) if f.lower().endswith((".jpg", ".png", ".jpeg"))])
+                        if c_imgs:
+                            thumb_path = os.path.join(g_folder, c_imgs[0])
+
+            if thumb_path:
+                pix = QPixmap(_get_display_image(thumb_path))
+                if not pix.isNull():
+                    # Crop to square for clean UI
+                    size = min(pix.width(), pix.height())
+                    rect = QRect((pix.width() - size) // 2, (pix.height() - size) // 2, size, size)
+                    cropped = pix.copy(rect).scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    thumb_lbl.setPixmap(cropped)
+
+            main_h_layout.addWidget(thumb_lbl, alignment=Qt.AlignmentFlag.AlignTop)
+
+            # Details layout (Vertical) on the right side
+            details_layout = QVBoxLayout()
+            details_layout.setSpacing(4)
 
             info_lbl = QLabel(
                 f"<b style='font-size:13px; color:#111827;'>{target}</b> "
@@ -2437,13 +2581,13 @@ class ElephantApp(QMainWindow):
                 f"{comp_str}"
             )
             info_lbl.setWordWrap(True)
-            row_layout.addWidget(info_lbl)
+            details_layout.addWidget(info_lbl)
 
             why_lbl = QLabel(
                 f"<span style='color:#6B7280; font-size:11px;'><b>Reason:</b> {why_str}</span>"
             )
             why_lbl.setWordWrap(True)
-            row_layout.addWidget(why_lbl)
+            details_layout.addWidget(why_lbl)
 
             btn_layout = QHBoxLayout()
             btn_layout.setContentsMargins(0, 4, 0, 0)
@@ -2482,9 +2626,43 @@ class ElephantApp(QMainWindow):
 
             btn_layout.addWidget(btn_compare, 2)
             btn_layout.addWidget(btn_merge, 3)
-            row_layout.addLayout(btn_layout)
+            details_layout.addLayout(btn_layout)
+            
+            main_h_layout.addLayout(details_layout)
+            return row_widget
 
-            self.sugg_container_layout.addWidget(row_widget)
+        # Render Gallery (Maximum 1, strict gap filtered)
+        # Render Gallery
+        if gallery_cands:
+            lbl = QLabel("<b>KNOWN IDENTITY MATCH</b>")
+            lbl.setStyleSheet("color: #111827; font-size: 12px; margin-top: 12px; letter-spacing: 1px; border-bottom: 2px solid #1B7340;")
+            self.sugg_container_layout.addWidget(lbl)
+            
+            if hide_known_reason:
+                warn_lbl = QLabel(f"<b>⚠️ Ambiguous identity match</b><br><br><b>Reason:</b><br>{hide_known_reason}<br><br>👉 <i>Please manually verify and select the correct match below.</i>")
+                warn_lbl.setStyleSheet("color: #9B1C1C; background: #FEF2F2; padding: 12px; border: 1px solid #FCA5A5; border-radius: 6px; margin-bottom: 10px; font-size: 11px;")
+                warn_lbl.setWordWrap(True)
+                self.sugg_container_layout.addWidget(warn_lbl)
+
+            for i, cand in enumerate(gallery_cands):
+                self.sugg_container_layout.addWidget(render_candidate(i, cand))
+        else:
+            lbl = QLabel("<b>KNOWN IDENTITY MATCH</b>")
+            lbl.setStyleSheet("color: #111827; font-size: 12px; margin-top: 12px; letter-spacing: 1px; border-bottom: 1px solid #E5E7EB;")
+            self.sugg_container_layout.addWidget(lbl)
+            
+            warn_lbl = QLabel(f"<b>⚠️ No confident identity match</b><br><br><b>Reason:</b><br>Available identity matches do not cross the minimum similarity threshold.<br><br>👉 <i>Review cluster-level matches below.</i>")
+            warn_lbl.setStyleSheet("color: #9B1C1C; background: #FEE2E2; padding: 10px; border-radius: 4px; font-size: 11px;")
+            warn_lbl.setWordWrap(True)
+            self.sugg_container_layout.addWidget(warn_lbl)
+
+        # Render Unknowns (Always show local batch overlaps)
+        if unknown_cands:
+            lbl = QLabel("<b>LOCAL BATCH MERGES (UNKNOWNS)</b>")
+            lbl.setStyleSheet("color: #111827; font-size: 12px; margin-top: 16px; letter-spacing: 1px; border-bottom: 1px solid #E5E7EB;")
+            self.sugg_container_layout.addWidget(lbl)
+            for i, cand in enumerate(unknown_cands[:4]): # Display top 4 unknowns
+                self.sugg_container_layout.addWidget(render_candidate(i, cand))
 
     def _open_compare_dialog_for(self, target_cluster, score=None, cand=None, row_widget=None):
         if not self.current_ambiguity_record:
@@ -2589,21 +2767,16 @@ class ElephantApp(QMainWindow):
             self,
         )
 
-        # Override the dialog's reject button to log before closing
-        original_reject = dialog.reject
-
-        def _on_reject():
+        result = dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            self._merge_unknown_clusters(cluster_name, target_cluster, cand)
+        elif result == 2:
+            # Explicitly rejected by user
             if cand is not None:
                 self._log_merge_decision(cluster_name, target_cluster, cand, "rejected")
             if row_widget:
                 row_widget.setParent(None)
                 row_widget.deleteLater()
-            original_reject()
-
-        dialog.reject = _on_reject
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._merge_unknown_clusters(cluster_name, target_cluster, cand)
 
     def _open_compare_dialog(self):
         if not self.current_suggestion or not self.current_ambiguity_record:
@@ -2661,12 +2834,25 @@ class ElephantApp(QMainWindow):
         src_path = os.path.join(self.output_base_dir, source_cluster)
         tgt_path = os.path.join(self.output_base_dir, target_cluster)
 
-        if not os.path.exists(src_path) or not os.path.exists(tgt_path):
+        if not os.path.exists(src_path):
             return
 
+        os.makedirs(tgt_path, exist_ok=True)
+
         for f in os.listdir(src_path):
-            if f.lower().endswith((".jpg", ".jpeg", ".png")):
-                shutil.move(os.path.join(src_path, f), os.path.join(tgt_path, f))
+            s_item = os.path.join(src_path, f)
+            t_item = os.path.join(tgt_path, f)
+            if os.path.isdir(s_item):
+                import shutil
+                if not os.path.exists(t_item):
+                    shutil.copytree(s_item, t_item)
+                else: 
+                    # Merge .crops together
+                    for crop_img in os.listdir(s_item):
+                        shutil.move(os.path.join(s_item, crop_img), os.path.join(t_item, crop_img))
+            elif f.lower().endswith((".jpg", ".jpeg", ".png")):
+                import shutil
+                shutil.move(s_item, t_item)
 
         mgr = UnknownClusterManager(
             unknown_dir=self.output_base_dir,
@@ -2951,6 +3137,14 @@ class ElephantApp(QMainWindow):
                 if d.startswith("Unknown_") and os.path.isdir(
                     os.path.join(self.output_base_dir, d)
                 ):
+                    # Skip stale folders that contain no actual images (e.g. only .crops subdir)
+                    folder_path = os.path.join(self.output_base_dir, d)
+                    has_images = any(
+                        f.lower().endswith((".jpg", ".jpeg", ".png"))
+                        for f in os.listdir(folder_path)
+                    )
+                    if not has_images:
+                        continue
                     if d not in seen_clusters:
                         other_clusters.append(d)
                         seen_clusters.add(d)
