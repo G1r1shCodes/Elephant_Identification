@@ -1,163 +1,97 @@
 # 🐘 Elephant Re-Identification System
 
-> **Strict Confidentiality:** Field tracking images, model checkpoints, embedding states, and training notebooks are explicitly excluded from version control.
+![Patent Pending](https://img.shields.io/badge/Patent-Pending-red)
+![Status](https://img.shields.io/badge/Status-Proprietary-blue)
+![Domain](https://img.shields.io/badge/Domain-Computer_Vision-success)
+![Focus](https://img.shields.io/badge/Focus-Wildlife_Conservation-green)
 
-> **Current Model:** V8.2 · ConvNeXt-Tiny · 128-D embeddings  
-> **Stack:** Python · PyTorch · YOLOv8 · PyQt6
+> **⚠️ Notice:** This project and its underlying methodology are currently under **patent protection**. All source code, model weights, and proprietary training datasets have been removed from this public repository to protect intellectual property. This repository serves as an architectural overview and demonstration of the system's capabilities.
 
-**Built a graph-based, human-in-the-loop elephant re-identification system designed as a risk-aware, decision-support pipeline for field researchers.**
+**A graph-based, human-in-the-loop elephant re-identification system designed as a risk-aware, decision-support pipeline for field researchers.**
 
 ---
 
 ## 🎯 Core Objective
 
-Build a robust Elephant Re-Identification System that can:
+The system addresses the critical challenge of tracking individual elephants across diverse field images by providing a robust Re-Identification (Re-ID) pipeline that can:
 
-- **Identify** the same elephant across different images
-- **Handle** pose variation, lighting changes, partial views
-- **Avoid** incorrect automatic merges
-- **Use** a human-in-the-loop system to ensure correctness
-
-> **Key idea: AI suggests, Human verifies.**
+- **Identify** the same elephant across different images despite pose variation, lighting changes, and partial views.
+- **Isolate** identity features by shifting from full-body analysis to precise head/ear cropping.
+- **Prevent** incorrect automatic merges by employing a graph-based clustering algorithm rather than naive centroid matching.
+- **Empower** researchers through a Human-in-the-Loop (HITL) interface—operating on the principle: *AI suggests, Human verifies*.
 
 ---
 
-## 🧠 System Overview
+## 🏗️ System Architecture
 
-### Pipeline Flow
+The pipeline processes raw field images through a multi-stage cascade, extracting robust features and grouping them safely before presenting ambiguous cases to a human reviewer.
 
-```text
-[ 📷 Raw Field Image ]
-         │
-         ▼
-[ YOLOv8n Head Detection ]          ← Multi-scale cascade (640→1024→1280)
-         │
-         ▼
-[ Crop & Quality Gate ]             ← Blur, contrast, head reference bank
-         │
-         ▼
-[ ConvNeXt Embedding (128-D) ]      ← L2-normalized, Flip-TTA
-         │
-         ▼
-[ Gallery Matching & Graph Clustering ] ──(Ambiguous)──> [ ⚠ Human Review Queue ]
-         │                                                      │
-         ▼                                                      │
-[ ✅ Named Identities & Unknown Clusters ] <────────────────────┘
-```
+```mermaid
+graph TD
+    %% Styling
+    classDef input fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef process fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef model fill:#fbb,stroke:#333,stroke-width:2px;
+    classDef decision fill:#ff9,stroke:#333,stroke-width:2px;
+    classDef output fill:#bfb,stroke:#333,stroke-width:2px;
+    classDef human fill:#fbf,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
 
-### Key Stages
+    A([📷 Raw Field Image]) ::: input
+    
+    subgraph Detection Phase
+        B[YOLOv8n Head Detection<br/>Multi-scale cascade 640→1024→1280] ::: process
+        C[Crop & Quality Gate<br/>Blur, contrast, head reference checks] ::: process
+    end
+    
+    subgraph Feature Extraction
+        D[ConvNeXt-Tiny Backbone<br/>28.6M params, ImageNet Pretrained] ::: model
+        E[128-D Embedding<br/>L2-normalized, Flip-TTA] ::: process
+    end
+    
+    subgraph Clustering Engine
+        F{Graph-Based Clustering &<br/>Gallery Matching} ::: decision
+        F -- "High Confidence<br/>(Clear Match)" --> G([✅ Named Identities &<br/>Stable Clusters]) ::: output
+        F -- "Ambiguous Match<br/>(Below Threshold)" --> H([⚠️ Human Review Queue]) ::: human
+    end
+    
+    subgraph Review UI
+        H --> I{Human-in-the-Loop<br/>Review Interface} ::: human
+        I -- "Confirm / Reject / Split" --> G
+    end
 
-| Stage | Description |
-|-------|-------------|
-| **Detection & Cropping** | Extract elephant head crops (not full body). Focus on identity features: ears, tusks, wrinkles. |
-| **Feature Extraction** | Each image → 128-D vector embedding. Similarity computed using cosine similarity. |
-| **Graph-Based Clustering** | Images connected based on similarity. Clusters formed as connected components. Avoids greedy/centroid-only failures. |
-| **Review & Merge (UI)** | Shows clusters (Unknown_1, Unknown_2…). Suggests possible merges. Human confirms or rejects. |
-
----
-
-## 🧩 Project Phases
-
-### ✅ Phase 1 — Feature Extraction (DONE)
-- Elephant detection + head cropping
-- Embedding generation
-- Shift from full-body → head-based features (major improvement)
-
-### ✅ Phase 2 — Clustering System (DONE)
-- Initial clustering (centroid-based → replaced)
-- Upgraded to graph-based clustering
-- Reduced fragmentation issues
-
-### ✅ Phase 3A — Review UI (DONE)
-- Built Review & Merge interface
-- Cluster visualization
-- Manual merge / split / promote actions
-
-### ✅ Phase 3B — Intelligent Suggestions (DONE)
-- Ranking of candidate clusters
-- Max similarity + centroid similarity
-- Bridge reasoning (indirect connections)
-- Relative similarity (rank within cluster)
-- Improved suggestion quality
-
-### ✅ Phase 3C — Calibration & Reliability (DONE)
-
-- Decision logging (`merge_decisions.csv`)
-- Scores: direct similarity, bridge strength, cluster cohesion
-- Bounded scoring (no overconfidence)
-- Safety threshold validation
-
-### ✅ Phase 4 — Semi-Automation Ecosystem (DONE)
-
-- Gap-analysis confidence filters
-- Safety-first UI blocks (Single image warnings)
-- Identity purity protection (defer to human authority)
-- Abstracted technical UI for non-engineers
-
-### 🔵 Phase 5 — System Maturity (FUTURE)
-
-**Goal:** Make system reliable and scalable.
-
-- Better embeddings (handle pose variation)
-- Adaptive thresholds (data-driven)
-- Robust pipeline (noise, edge cases)
-- Evaluation metrics (precision, recall)
-- Works across datasets, not just one
-
----
-
-## 📂 Repository Structure
-
-```text
-├── app.py                      # PyQt6 Desktop Application (4-tab UI)
-├── pipeline.py                 # Detection + Embedding inference engine
-├── core_engine.py              # Clustering, matching & merge logic
-├── cluster_health.py           # Cluster safety checks & health monitoring
-├── review_store.py             # Ambiguity queue persistence
-├── requirements.txt            # Python dependencies
-├── elephant_reid.spec          # PyInstaller build spec
-├── app_config.json             # Runtime state persistence
-├── PROJECT_GUIDE.md            # Detailed 34KB engineering deep-dive
-├── README.md                   # This file
-│
-├── models/                     # YOLO & Re-ID model weights (gitignored)
-├── data/                       # Datasets, DBs, archives (gitignored)
-├── tools/                      # Diagnostic, evaluation & dataset tools
-├── kaggle/                     # Training notebooks (V1–V8)
-├── docs/                       # WII methodology & design documentation
-├── tests/                      # Unit tests (cluster manager, health checks)
-├── logs/                       # Runtime logs (gitignored)
-├── src/                        # Legacy model code & preprocessing
-└── notebooks/                  # Exploration notebooks
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
 ```
 
 ---
 
-## ⚠️ Key Challenges
+## 🧩 Architectural Highlights
 
-| Challenge | Description |
-|-----------|-------------|
-| **Intra-class variation** | Same elephant looks very different across images |
-| **Precision vs Recall** | Strict → fragmentation; Loose → wrong merges |
-| **Embedding limitations** | Some visually similar images still get low similarity |
-| **Decision-support design** | Showing useful suggestions without overwhelming or misleading the user |
+### 1. Detection & Quality Gating
+- **Multi-Scale Head Detection:** Utilizes YOLOv8n specifically fine-tuned for elephant head detection (ignoring body mass which introduces noise).
+- **Quality Gates:** Automatically filters out blurry or low-contrast crops to prevent poisoning the gallery.
 
----
+### 2. Feature Extraction
+- **ConvNeXt-Tiny Backbone:** Chosen for its balance of efficiency and modern convolutional performance.
+- **Robust Loss Function Strategy:** Model trained using a composite loss function including Hard-Positive Alignment, ArcFace, Triplet, and Center loss to maximize inter-class variance and minimize intra-class variance.
 
-## 🏗️ Architecture Details
+### 3. Graph-Based Clustering
+- **Beyond Centroids:** Replaced traditional centroid-based clustering with a graph-based connected components approach, significantly reducing fragmentation issues caused by extreme pose variations.
+- **Triple-Condition Merge Guards:** Strict thresholds prevent overconfident merges, prioritizing precision over recall to maintain gallery purity.
 
-| Property | Value |
-|----------|-------|
-| **Backbone** | ConvNeXt-Tiny (28.6M params, ImageNet pretrained) |
-| **Input size** | 224 × 224 RGB |
-| **Embedding dim** | 128-D (L2-normalized) |
-| **Training loss** | Hard-Positive Alignment (1.0) + ArcFace (0.6) + Triplet (0.5) + Center (0.2) |
-| **Clustering** | Graph-based connected components with triple-condition merge guards |
-| **Head detector** | YOLOv8n with multi-scale cascade + tiled recovery |
-
-> For the complete technical deep-dive into loss functions, thresholds, clustering algorithms, and UI architecture, see **[PROJECT_GUIDE.md](PROJECT_GUIDE.md)**.
+### 4. Human-in-the-Loop (HITL) Ecosystem
+- **Intelligent Suggestions:** The system ranks candidate clusters based on direct similarity, bridge strength (indirect connections), and relative cluster cohesion.
+- **Safety-First UI:** Provides safety blocks, single-image warnings, and gap-analysis confidence filters. The ultimate authority always defers to the human reviewer.
 
 ---
 
-**Independent Research Project**
-*Unauthorized distribution of field metadata or model weights is strictly prohibited.*
+## 🏷️ Tags & Topics
+
+`#ComputerVision` `#WildlifeConservation` `#DeepLearning` `#PyTorch` `#YOLOv8` `#ConvNeXt` `#HumanInTheLoop` `#MetricLearning` `#ImageRetrieval` `#GraphClustering`
+
+---
+
+*Note: For inquiries regarding the patent, licensing, or academic collaboration, please contact the repository owner.*
