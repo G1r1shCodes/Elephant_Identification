@@ -29,34 +29,33 @@ The pipeline processes raw field images through a multi-stage cascade, extractin
 ```mermaid
 graph TD
     %% Styling
-    classDef input fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef process fill:#bbf,stroke:#333,stroke-width:2px;
-    classDef model fill:#fbb,stroke:#333,stroke-width:2px;
-    classDef decision fill:#ff9,stroke:#333,stroke-width:2px;
-    classDef output fill:#bfb,stroke:#333,stroke-width:2px;
-    classDef human fill:#fbf,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef input fill:#f9f,stroke:#333,stroke-width:2px,color:#000;
+    classDef process fill:#bbf,stroke:#333,stroke-width:2px,color:#000;
+    classDef model fill:#fbb,stroke:#333,stroke-width:2px,color:#000;
+    classDef decision fill:#ff9,stroke:#333,stroke-width:2px,color:#000;
+    classDef output fill:#bfb,stroke:#333,stroke-width:2px,color:#000;
+    classDef human fill:#fbf,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5,color:#000;
 
-    A([📷 Raw Field Image]) ::: input
+    A(["📷 Raw Field Image"])
     
-    subgraph Detection Phase
-        B[YOLOv8n Head Detection<br/>Multi-scale cascade 640→1024→1280] ::: process
-        C[Crop & Quality Gate<br/>Blur, contrast, head reference checks] ::: process
+    subgraph "Detection Phase"
+        B["YOLOv8n Head Detection<br/>Multi-scale cascade 640→1024→1280"]
+        C["Crop & Quality Gate<br/>Blur, contrast, head reference checks"]
     end
     
-    subgraph Feature Extraction
-        D[ConvNeXt-Tiny Backbone<br/>28.6M params, ImageNet Pretrained] ::: model
-        E[128-D Embedding<br/>L2-normalized, Flip-TTA] ::: process
+    subgraph "Feature Extraction"
+        D["ConvNeXt-Tiny Backbone<br/>28.6M params, ImageNet Pretrained"]
+        E["128-D Embedding<br/>L2-normalized, Flip-TTA"]
     end
     
-    subgraph Clustering Engine
-        F{Graph-Based Clustering &<br/>Gallery Matching} ::: decision
-        F -- "High Confidence<br/>(Clear Match)" --> G([✅ Named Identities &<br/>Stable Clusters]) ::: output
-        F -- "Ambiguous Match<br/>(Below Threshold)" --> H([⚠️ Human Review Queue]) ::: human
+    subgraph "Clustering Engine"
+        F{"Graph-Based Clustering &<br/>Gallery Matching"}
+        G(["✅ Named Identities &<br/>Stable Clusters"])
+        H(["⚠️ Human Review Queue"])
     end
     
-    subgraph Review UI
-        H --> I{Human-in-the-Loop<br/>Review Interface} ::: human
-        I -- "Confirm / Reject / Split" --> G
+    subgraph "Review UI"
+        I{"Human-in-the-Loop<br/>Review Interface"}
     end
 
     A --> B
@@ -64,6 +63,17 @@ graph TD
     C --> D
     D --> E
     E --> F
+    F -- "High Confidence<br/>(Clear Match)" --> G
+    F -- "Ambiguous Match<br/>(Below Threshold)" --> H
+    H --> I
+    I -- "Confirm / Reject / Split" --> G
+
+    class A input;
+    class B,C,E process;
+    class D model;
+    class F,I decision;
+    class G output;
+    class H human;
 ```
 
 ---
