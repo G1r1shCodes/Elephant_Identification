@@ -4,12 +4,6 @@
 ![Status](https://img.shields.io/badge/Status-Proprietary-blue)
 ![Domain](https://img.shields.io/badge/Domain-Computer_Vision-success)
 ![Focus](https://img.shields.io/badge/Focus-Wildlife_Conservation-green)
-<p align="center">
-  <img src="https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white">
-  <img src="https://img.shields.io/badge/YOLOv8-Detection-111F68?style=for-the-badge">
-  <img src="https://img.shields.io/badge/ConvNeXt-Metric%20Learning-purple?style=for-the-badge">
-  <img src="https://img.shields.io/badge/HITL-Human%20Review-orange?style=for-the-badge">
-</p>
 
 > **⚠️ Notice:** This project and its underlying methodology are currently under **patent protection**. All source code, model weights, and proprietary training datasets have been removed from this public repository to protect intellectual property. This repository serves as an architectural overview and demonstration of the system's capabilities.
 
