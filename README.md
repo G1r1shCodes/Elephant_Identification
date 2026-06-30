@@ -11,7 +11,7 @@
 
 ---
 
-## 🎯 Core Objective
+## Core Objective
 
 The system addresses the critical challenge of tracking individual elephants across diverse field images by providing a robust Re-Identification (Re-ID) pipeline that can:
 
@@ -22,7 +22,7 @@ The system addresses the critical challenge of tracking individual elephants acr
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 The pipeline processes raw field images through a multi-stage cascade, extracting robust features and grouping them safely before presenting ambiguous cases to a human reviewer.
 
@@ -78,7 +78,7 @@ graph TD
 
 ---
 
-## 🧩 Architectural Highlights
+## Architectural Highlights
 
 ### 1. Detection & Quality Gating
 - **Multi-Scale Head Detection:** Utilizes YOLOv8n specifically fine-tuned for elephant head detection (ignoring body mass which introduces noise).
@@ -98,7 +98,7 @@ graph TD
 
 ---
 
-## 🏷️ Tags & Topics
+## Tags & Topics
 
 `#ComputerVision` `#WildlifeConservation` `#DeepLearning` `#PyTorch` `#YOLOv8` `#ConvNeXt` `#HumanInTheLoop` `#MetricLearning` `#ImageRetrieval` `#GraphClustering`
 
